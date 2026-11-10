@@ -20,6 +20,7 @@ app/src/
 │   ├── app.js          # 入口，初始化路由与全局状态
 │   ├── api.js          # 封装 window.bili，统一错误处理
 │   ├── store.js        # 全局状态（发布订阅）+ localStorage 缓存
+│   ├── session.js      # 播放现场快照：写盘节流 / 启动还原（见 3.15）
 │   ├── player.js       # 音频播放内核（HTMLAudioElement 封装）
 │   ├── router.js       # 视图切换
 │   ├── views/
@@ -68,10 +69,15 @@ bili.favFolders({})       → { folders:[{id,title,mediaCount,cover}] }
 bili.favList({ mediaId, page=1, pageSize=40 }) → { items:VideoItem[], hasMore }
 bili.history({ page=1, pageSize=20 }) → { items:VideoItem[], cursor }
 
-// 配置（持久化到 userData/bili-listen-config.json）
-bili.getAllConfig()       → { volume, rate, quality, playMode, cookie, user, sleepTimer,
-                              theme, showLyric, autoNext, minimizeToTray, windowBounds }
-bili.setConfig(patch)     → 合并后的完整配置
+// 配置（持久化到 %APPDATA%\BiliListen\bili-listen-config.json，详见 3.15）
+bili.getAllConfig()       → { volume, rate, quality, playMode, sleepTimer, showLyric, autoNext,
+                              theme, minimizeToTray, windowBounds, lastRoute,
+                              cookie, user, session, schema, dataDir }
+                            // ★ 这个是扁平对象，不套 {ok,data}；判断方式：看 config.cookie
+bili.setConfig(patch)     → { ok, data: 合并后的完整配置 }
+bili.setConfigSync(patch) → 同上，同步返回（只给 beforeunload / 退出前用）
+bili.dataDir()            → { ok, data: 'C:\\Users\\<你>\\AppData\\Roaming\\BiliListen' }
+bili.openDataDir()        → { ok }        // 用资源管理器打开数据目录
 
 // 窗口
 bili.minimize(); bili.maximize(); bili.close(); bili.isMaximized()
@@ -186,6 +192,45 @@ bili.reportPlayerState(state) // { playing:boolean, title:string }  用于托盘
 - 加载态用骨架屏，不要空白。
 - 图片 `loading="lazy"`，加载失败用占位图（CSS 渐变 + 音符图标）。
 
+### 3.15 数据持久化（关掉再开，接着听）
+
+**落盘位置**：`%APPDATA%\BiliListen\bili-listen-config.json`。路径来自 `app.getPath('userData')`，不跟 package.json 的 `name` 走（改产品名不会把用户数据搞丢）；调试和验收脚本可用环境变量 `BILI_LISTEN_DATA_DIR` 整体改道。老版本的 `%APPDATA%\bili-listen-desktop` 会在首次启动时自动迁移过来（配置文件 + Local Storage / Network 等 Chromium profile），迁完写一个 `.migrated-from` 留痕。
+
+**存什么**
+
+| 键 | 内容 |
+|---|---|
+| `volume` / `rate` / `quality` / `playMode` | 播放器偏好 |
+| `theme` / `showLyric` / `autoNext` / `minimizeToTray` / `windowBounds` | 界面偏好 |
+| `sleepTimer` | 定时关闭（0 = 没设） |
+| `lastRoute` | 上次所在页面，启动时还原（`discover` / `search` / `ranking` / `history` / `fav` / `settings`） |
+| `cookie` / `user` | 登录态。Cookie 只存在主进程，渲染进程拿不到 `SESSDATA` 原文 |
+| `session` | 播放现场快照 `{queue, currentIndex, playing, position, updatedAt}` |
+| `schema` | 数据结构版本号，将来加字段 / 改字段时用来做迁移 |
+
+**写入策略（防丢、防写坏）**
+
+1. 先写 `bili-listen-config.json.tmp` 再 `rename` 覆盖 —— rename 是原子的，断电或强杀不会留下半截 JSON，最坏只丢这一次改动。
+2. 覆盖前把旧文件复制成 `.bak`；读取时主文件解析失败自动回退 `.bak`，`.bak` 也坏就用 `DEFAULTS`（不要让一个坏文件把应用卡在启动阶段）。
+3. 普通改动 150ms 防抖异步落盘；退出登录、`before-quit`、页面 `beforeunload` 走同步写（`setConfigSync`），保证「点退出 → 立刻再打开」读到的是新数据。
+
+**会话快照的时序**（`src/js/session.js`）
+
+- 队列 / 曲目变化（结构变化）800ms 内落盘；播放进度 5s 一次。不要每秒写盘。
+- 队列为空且没在播时**不写**。否则「打开应用啥也没听就关掉」会用空快照把上次的队列和断点盖掉——这个坑踩过。
+- 启动时 `restoreSession()` 只回填队列、`currentIndex` 和进度（记到 `pendingSeek`，等 `loadedmetadata` 再 seek），**不自动出声**；用户按下播放才从那个秒数继续。
+- 「最近在听」点历史条目走条目的 `lastPos` 续播，和上面的断点是两条独立路径，互不覆盖。
+- 进度的 seek 在音频还没 `src` 时也必须能调（只改 `pendingSeek`，不抛错），因为还原发生在播放之前。
+
+**设置页要有**：一行「数据目录」，显示完整路径 + 「打开」按钮（`bili.dataDir()` / `bili.openDataDir()`），方便用户备份、清空或搬机器。
+
+**验收**
+
+- 播到 1:30 直接关窗 → 重开：队列、曲目、1:30 位置都在，且**没有**自动播放。
+- 切到搜索页再关窗 → 重开：落在搜索页。
+- 退出登录再开：`cookie` 已清空，不会「幽灵登录」。
+- 删掉 `bili-listen-config.json` 只留 `.bak`：能从 `.bak` 恢复。
+
 ## 4. 设计规范
 
 ### 4.1 视觉风格
@@ -248,6 +293,7 @@ bili.reportPlayerState(state) // { playing:boolean, title:string }  用于托盘
 8. 排行榜能切 Tab 并播放。
 9. 深色/浅色主题切换正常。
 10. 窗口最小化/最大化/关闭按钮正常，关闭时若开了「最小化到托盘」则隐藏到托盘。
+11. 播放中关窗再开：队列、曲目、播放进度还原，且不自动出声；上次所在页面也还原（详见 3.15）。
 
 ## 7. 注意
 

@@ -54,6 +54,39 @@ npm start          # 或双击 start.bat
 
 > **坑**：本机全局环境变量 `ELECTRON_RUN_AS_NODE=1`，直接跑 `electron.exe` 会让它退化成纯 Node 进程（`app` 是 undefined）。`start.bat` 和 `scripts/launch.js` 都会先清掉它。
 
+## 装成桌面应用（Windows 安装包）
+
+```powershell
+cd app
+node scripts\build.js
+# 产物：
+#   dist\BiliListen-Setup-1.0.0.exe     安装包（65.6 MB）
+#   dist\BiliListen-win32-x64\          免安装目录版（整个文件夹拷走也能跑）
+```
+
+双击 `BiliListen-Setup-1.0.0.exe`，跟市面上的桌面软件一样：
+
+1. 选安装位置（默认 `%LOCALAPPDATA%\Programs\BiliListen`，**当前用户安装，不要管理员权限**，不弹 UAC）
+2. 装完自动在**桌面**和**开始菜单**创建 `BiliListen` 快捷方式，并直接启动
+3. 控制面板「应用和功能」里能正常卸载（卸载**不会删**你的数据）
+
+安装包不带数字签名，Windows SmartScreen 可能提示「未知发布者」，点「更多信息 → 仍要运行」即可。
+
+## 数据存在哪（关掉再开接着听）
+
+| 存了什么 | 位置 |
+|---|---|
+| 登录态（SESSDATA）、音量、倍速、音质、播放模式、主题、窗口大小、上次停留页面 | `%APPDATA%\BiliListen\bili-listen-config.json` |
+| **播放队列 + 当前曲目 + 听到第几秒** | 同上，`session` 字段 |
+| 本地播放记录、搜索历史 | 同目录下的 Chromium `Local Storage` |
+| 登录窗口的 Cookie 分区 | 同目录下的 `Network\Cookies` |
+
+设置页里「数据目录 → 打开目录」能直接跳过去，卸载重装、换机器拷走这个文件夹就能恢复。
+
+写盘策略是 **先写 `.tmp` 再原子 rename，并留一份 `.bak`**：强杀进程、断电都不会留下半截 JSON；主文件要是真坏了，启动时会自动从 `.bak` 回滚。退出（含托盘退出）走同步 flush，防抖队列里的改动不会丢。
+
+从旧版本（`%APPDATA%\bili-listen-desktop`）升级的，首次启动会自动迁移配置、登录态和播放记录，不用重新登录。
+
 ## 自动化验收
 
 ```powershell
@@ -80,10 +113,11 @@ PASS 10. 队列抽屉打开
 
 | 脚本 | 覆盖 | 实测 |
 |---|---|---|
-| `node scripts\verify-settings.js` | 发现页骨架卡清理 / 设置页 7 行 / 音质·倍速·托盘三项落盘 | **11/11** |
+| `node scripts\verify-settings.js` | 发现页骨架卡清理 / 设置页 / 音质·倍速·托盘三项落盘 | **11/11** |
 | `node scripts\verify-packaged.js` | **打包版**（自动启动 `dist\BiliListen.exe`，验完自动关）：卡片/播放/6 档倍速/队列/全屏/倍速菜单/设置页 | **9/9** |
+| `node scripts\verify-persistence.js` | **关掉再开还在不在**：队列/当前曲目/断点秒数/上次页面，强杀后 JSON 不坏、不自动出声、点播放续播 | **18/18** |
 | `node scripts\verify-login.js` | 扫码二维码生成 / 轮询 / 浏览器登录 IPC / Cookie 校验 / 三 Tab 弹层 | **8/8** |
-| `node scripts\verify-cookie-import.js` | 粘贴 Cookie 的解析（裸值/整行/脏输入/头注入）+ 落盘补全 + 假凭据必须被拒 | **15/15** |
+| `node scripts\verify-cookie-import.js` | 粘贴 Cookie 的解析（裸值/整行/脏输入/头注入）+ 落盘补全 + 假凭据必须被拒 | **15/15**（设 `BILI_TEST_COOKIE` 时 16/16） |
 
 > **测试全程静音 + 不弹窗**：`verify.js` 启动参数带 `--mute-audio --hidden`，主进程 `isHidden` 分支不调用 `win.show()`，任务栏都看不到窗口。
 >
@@ -93,11 +127,31 @@ PASS 10. 队列抽屉打开
 
 ```powershell
 cd app
-node scripts\build.js
-# 产物：dist\BiliListen-win32-x64\  (213.8 MB)
+node scripts\build.js            # 安装包 + 目录版（约 90 秒）
+node scripts\build.js --dir      # 只出目录版，快，验收用
+node scripts\make-icon.js        # 改图标后重出 build\icon.ico（SVG → 10 档尺寸）
 ```
 
-产物已实测可启动（`verify-packaged.js` 9/9）：20 张卡片、点播出声、图片代理 200/41KB、6 档倍速、全屏播放页、设置页完整。
+构建用 electron-builder：应用代码打成 `app.asar`（1.7 MB），Electron 运行时保留 `zh-CN`/`en-US` 两套语言包。
+
+产物已实测（`verify-packaged.js` 9/9）：20 张卡片、点播出声、图片代理、6 档倍速、全屏播放页、设置页完整。
+
+### 冷启动实测
+
+从双击图标到窗口出现（同一台机器，装好后连测 3 次）：
+
+| 次数 | 耗时 |
+|---|---|
+| 1（首次，磁盘冷） | 743 ms |
+| 2 | 570 ms |
+| 3 | 530 ms |
+| 平均 | **约 614 ms** |
+
+为这个数字做的三件事：
+
+1. **窗口先出、代理后起** —— 原先 `await proxy.start()` 挡在 `createWindow()` 前面，白白多等一轮端口监听；现在先画窗口，音频代理在后台起。
+2. **qrcode 懒加载** —— 二维码库（带 pngjs）只在真点「扫码登录」时才 require，启动阶段不解析。
+3. **asar 打包** —— 几百个小文件合成一个包，少掉大量目录遍历和 CreateFile。
 
 ---
 
