@@ -10,17 +10,21 @@ const bili = require('./services/bili');
 const tvLogin = require('./services/tv-login');
 const QRCode = require('qrcode');
 const { AudioProxy } = require('./services/proxy');
-const { BrowserLoginServer } = require('./services/browser-login');
 
 const isDev = process.argv.includes('--dev');
 /** 静默模式：不显示窗口、不进任务栏（自动化测试用） */
 const isHidden = process.argv.includes('--hidden');
 /** 音频代理固定端口，前端要拼图片代理 URL 需要提前知道 */
 const PROXY_PORT = 45871;
+/** 登录窗口专用分区：登录态常驻，下次登录直接复用 */
+const LOGIN_PARTITION = 'persist:bili-login';
+/** 落盘用的 Cookie 字段（SESSDATA 是 HttpOnly，只有分区 cookie store 能拿到） */
+const LOGIN_COOKIE_KEYS = ['SESSDATA', 'DedeUserID', 'DedeUserID__ckMd5', 'bili_jct', 'sid'];
 let win = null;
 let tray = null;
 let proxy = null;
-let browserLoginServer = null;
+let loginWin = null;
+let loginPollTimer = null;
 let quitting = false;
 
 // ---------------- 配置持久化 ----------------
@@ -279,15 +283,83 @@ function registerIpc() {
 
   ipcMain.handle('api:loginStatus', wrap(async () => bili.checkLogin({ cookie: config.cookie })));
 
-  // ============ 系统浏览器登录 ============
-  // 不再内置 BrowserWindow（验证码/风控在 Electron 里脆弱），拉起系统默认浏览器登录，
-  // 登录后用户在 B 站标签页点「回传书签」，Cookie 经本地回环服务送回（services/browser-login.js）。
+  // ============ 应用内登录窗口 ============
+  // SESSDATA 是 HttpOnly：浏览器里 document.cookie 读不到，passport 也只会把它拼进
+  // 自家域之间的跨域同步链接（127.0.0.1 不在白名单）。唯一可靠的取法是 Chromium 自己的
+  // cookie store —— 所以登录放在独立分区的窗口里跑，主进程直接读该分区的 Cookie。
+  function stopLoginPoll() {
+    if (loginPollTimer) {
+      clearInterval(loginPollTimer);
+      loginPollTimer = null;
+    }
+  }
+
+  async function readLoginCookie(ses) {
+    const list = await ses.cookies.get({});
+    const map = new Map();
+    for (const c of list) {
+      const d = String(c.domain || '').replace(/^\./, '');
+      if (!/bilibili\.com$/.test(d)) continue;
+      if (!map.has(c.name)) map.set(c.name, c.value);
+    }
+    if (!map.has('SESSDATA')) return '';
+    return LOGIN_COOKIE_KEYS.filter((k) => map.has(k))
+      .map((k) => `${k}=${map.get(k)}`)
+      .join('; ');
+  }
+
+  function startLoginPoll(ses) {
+    stopLoginPoll();
+    let ticks = 0;
+    let lastTried = '';
+    loginPollTimer = setInterval(async () => {
+      ticks++;
+      if (ticks > 375) return stopLoginPoll(); // 5 分钟没登上就放弃，不死循环
+      try {
+        const cookie = await readLoginCookie(ses);
+        if (!cookie || cookie === lastTried) return;
+        lastTried = cookie;
+        console.log('[login] 分区内发现新的登录 Cookie，校验中…');
+        const status = await bili.checkLogin({ cookie });
+        if (!status.isLogin) return;
+        saveConfig({ cookie, user: status });
+        _wbiReset();
+        send('auth:loginCaptured', status);
+        stopLoginPoll();
+        if (loginWin && !loginWin.isDestroyed()) loginWin.close();
+      } catch {
+        // 单次失败忽略，下一拍继续
+      }
+    }, 800);
+  }
+
   ipcMain.handle(
     'api:browserLogin',
     wrap(async () => {
-      await browserLoginServer.start();
-      await shell.openExternal(browserLoginServer.passportUrl);
-      return { landUrl: browserLoginServer.landUrl, port: browserLoginServer.port };
+      if (loginWin && !loginWin.isDestroyed()) {
+        loginWin.focus();
+        return { opened: true, reuse: true };
+      }
+      const ses = session.fromPartition(LOGIN_PARTITION);
+      loginWin = new BrowserWindow({
+        width: 1000,
+        height: 720,
+        autoHideMenuBar: true,
+        title: '登录哔哩哔哩',
+        webPreferences: {
+          partition: LOGIN_PARTITION,
+          nodeIntegration: false,
+          contextIsolation: true,
+          sandbox: true,
+        },
+      });
+      loginWin.on('closed', () => {
+        loginWin = null;
+        stopLoginPoll();
+      });
+      await loginWin.loadURL('https://passport.bilibili.com/login');
+      startLoginPoll(ses);
+      return { opened: true };
     }),
   );
 
@@ -405,22 +477,6 @@ if (!gotLock) {
     proxy.setResolver(resolveAudio);
     await proxy.start(PROXY_PORT);
     console.log('[proxy] listening on', proxy.port);
-
-    // 系统浏览器登录回传服务：本地回环收 Cookie → 官方接口校验 → 落盘 → 推送渲染层
-    browserLoginServer = new BrowserLoginServer();
-    browserLoginServer.onCapture = async (cookie) => {
-      const status = await bili.checkLogin({ cookie });
-      if (!status.isLogin) {
-        send('auth:loginCaptured', null);
-        return { ok: false, message: 'Cookie 校验失败：未登录或已过期' };
-      }
-      saveConfig({ cookie, user: status });
-      _wbiReset();
-      send('auth:loginCaptured', status);
-      return { ok: true, message: `登录成功：${status.uname || 'B 站用户'}，可以关掉本页回到 BiliListen` };
-    };
-    await browserLoginServer.start();
-    console.log('[browser-login] listening on', browserLoginServer.port);
 
     registerIpc();
     createWindow();

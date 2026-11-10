@@ -199,7 +199,7 @@ B 站 2023 年起 Web API 要 `w_rid` 签名：
 | 方式 | 原理 | 状态 |
 |---|---|---|
 | **扫码登录（主推）** | B 站 TV 端接口，二维码画在应用内，手机 App 扫码确认 | ✅ 8/8 验收通过 |
-| 浏览器登录 | 拉起**系统默认浏览器**登录 passport，本地回环服务接收回传书签送回的 Cookie | ✅ 回传链路已验证 |
+| 应用内登录窗口 | 独立浏览器分区打开 passport，主进程直读该分区 Cookie（含 HttpOnly 的 `SESSDATA`） | ✅ 开窗 / 读 Cookie 链路已验证 |
 | 粘贴 Cookie | 手动粘贴 `document.cookie` | ✅ 兜底 |
 
 ### 扫码登录是怎么做的
@@ -228,7 +228,9 @@ POST https://passport.bilibili.com/x/passport-tv-login/qrcode/poll
 
 这套是电视端「云视听小电视」的登录通道，等同在 TV 上登录，Cookie 由官方下发，全程不碰密码。
 
-**为什么不内置登录窗口**：`passport.bilibili.com` 依赖大量风控脚本 + 跨域 iframe（`s1.hdslb.com/bfs/seed/jinkela/.../iframe.html`），Electron 内嵌窗口里跑得脆弱。现方案直接拉起系统默认浏览器：极验/滑块/密码管理器全部原生体验；登录后由回传页的「回传书签」（bookmarklet）把 `document.cookie` 发到本地回环 `127.0.0.1:45872/cb`，主进程先经官方接口校验登录态再落盘。内置 `BrowserWindow` 网页登录已移除。
+**为什么不再用「回传书签 / 系统浏览器」**：`SESSDATA` 是 **HttpOnly**，浏览器里 `document.cookie` 根本读不到；而 passport 的跨域登录同步只对自家域生效，`gourl` 指到 `127.0.0.1` 也不会把凭据带过来。也就是说「在系统浏览器登录 → 把 Cookie 送回本机」这条路在 Web 安全模型下走不通。
+
+现在改成：登录跑在一个**独立分区（`persist:bili-login`）的应用内窗口**里，登录页本身照常渲染（扫码 / 密码 / 短信 / 微信全都在，实测 passport 页面完整加载），主进程用 `session.fromPartition(...).cookies.get()` 直接读该分区的 Cookie——这是唯一能拿到 HttpOnly `SESSDATA` 的途径。登录态常驻该分区，下次开窗直接复用。
 
 **验收结果（`node scripts/verify-login.js`，静默无窗口）：**
 

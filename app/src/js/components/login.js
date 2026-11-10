@@ -1,6 +1,6 @@
 // ===== 登录弹层：三种方式 =====
 // 1) 扫码登录（主推，TV 端接口，二维码画在应用里）
-// 2) 浏览器登录（拉起系统默认浏览器登录，成功后经本地回传服务收 Cookie）
+// 2) 应用内登录窗口（独立分区登录，主进程直读分区 Cookie，含 HttpOnly 的 SESSDATA）
 // 3) 粘贴 Cookie（兜底）
 
 import { bili } from '../api.js';
@@ -162,7 +162,7 @@ export function openLoginModal(opts = {}) {
   function renderWeb() {
     const btn = el('button', {
       class: 'btn primary',
-      text: '拉起系统默认浏览器登录',
+      text: '打开登录窗口',
       style: { width: '100%' },
     });
     const status = el('div', {
@@ -175,19 +175,18 @@ export function openLoginModal(opts = {}) {
       if (browserLoginRunning) return;
       browserLoginRunning = true;
       btn.disabled = true;
-      btn.textContent = '正在拉起浏览器…';
+      btn.textContent = '正在打开…';
       try {
         const res = await bili.browserLogin();
         if (!res.ok) {
           toast.error(res.error || '启动失败');
-          btn.textContent = '拉起系统默认浏览器登录';
           return;
         }
-        btn.textContent = '等待在浏览器里完成登录…';
+        btn.textContent = '等待登录完成…';
         status.textContent =
-          '① 在弹出的默认浏览器里正常登录 B 站（验证码/密码体验与平时完全一致）\n' +
-          '② 登录成功会跳到「回传页」，按页面提示把「回传 BiliListen」拖到书签栏\n' +
-          '③ 切回任意 bilibili.com 标签页，点书签「回传 BiliListen」，这里会自动完成登录';
+          '① 在弹出的登录窗口里正常登录（扫码 / 密码 / 验证码都行）\n' +
+          '② 登录成功后窗口会自动关闭，这边立刻同步到账号\n' +
+          '③ 登录态会记住，下次不用再登';
         bindCapture();
       } finally {
         browserLoginRunning = false;
@@ -198,8 +197,8 @@ export function openLoginModal(opts = {}) {
     body.append(btn, status);
     body.appendChild(
       el('div', { class: 'cookie-help', style: { marginTop: '14px' } }, [
-        el('div', { text: '不弹内置窗口：登录页直接跑在你的默认浏览器里，极验/滑块/密码管理器全部原生可用。' }),
-        el('div', { text: '回传书签只读取当前页面 Cookie 发往本机 127.0.0.1，不经任何第三方；书签保留后下次免拖拽。' }),
+        el('div', { text: '登录窗口是一个独立的浏览器分区，B 站的验证码、滑块、密码管理器都能正常用。' }),
+        el('div', { text: '登录凭据只留在本机这个分区里，主进程读出后经官方接口校验才落盘，不经任何第三方。' }),
       ]),
     );
   }
