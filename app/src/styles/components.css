@@ -337,9 +337,9 @@
   transition: transform .3s var(--ease);
   display: flex;
   flex-direction: column;
-  pointer-events: auto;
+  pointer-events: none; /* 关闭态穿透，打开态由 .open 放行 */
 }
-.queue-panel.open { transform: translateX(0); }
+.queue-panel.open { transform: translateX(0); pointer-events: auto; }
 .queue-header {
   padding: 16px 20px;
   display: flex;
@@ -402,10 +402,10 @@
   opacity: 0;
   transform: translateY(20px);
   transition: opacity .35s var(--ease), transform .35s var(--ease);
-  pointer-events: auto;
+  pointer-events: none; /* 关闭态整层穿透，否则透明层吞掉全页点击 */
   overflow: hidden;
 }
-.np-overlay.open { opacity: 1; transform: translateY(0); }
+.np-overlay.open { opacity: 1; transform: translateY(0); pointer-events: auto; }
 .np-bg {
   position: absolute;
   inset: -60px;

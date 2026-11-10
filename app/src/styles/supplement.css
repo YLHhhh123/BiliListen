@@ -280,9 +280,11 @@
   z-index: 900;
   pointer-events: none;
 }
-#nowplaying-root > .np-overlay,
-#queue-root > .queue-mask,
-#queue-root > .queue-panel {
+/* 只有打开态的覆盖层才接收点击；pointer-events 是继承属性，
+   关闭态不显式改回 auto 就会沿用容器的 none，整层透明穿透 */
+#nowplaying-root > .np-overlay.open,
+#queue-root > .queue-mask.open,
+#queue-root > .queue-panel.open {
   pointer-events: auto;
 }
 #queue-root { z-index: 950; }
