@@ -1,0 +1,19 @@
+{
+  "name": "bili-listen-desktop",
+  "version": "1.0.0",
+  "description": "BiliListen · 哔哩哔哩听视频桌面版",
+  "main": "electron/main.js",
+  "author": "耄耋",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "start": "node scripts/launch.js",
+    "dev": "node scripts/launch.js --dev"
+  },
+  "devDependencies": {
+    "electron": "27.3.11"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4"
+  }
+}

@@ -1,0 +1,327 @@
+/* ===== supplement.css =====
+ * 补齐 views 里新引入的类：分段 Tab、排序 chip、滚动哨兵、图标按钮、歌词区。
+ * 独立文件，不动 base/layout/components 三份原始样式。
+ */
+
+/* ---------- 分段 Tab（最近在听 / 收藏夹） ---------- */
+.seg-tabs {
+  display: inline-flex;
+  gap: 4px;
+  padding: 3px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  margin-bottom: 18px;
+}
+.seg-tab {
+  padding: 6px 18px;
+  border-radius: 999px;
+  font-size: 13px;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: all .16s var(--ease);
+  background: none;
+  border: none;
+}
+.seg-tab:hover { color: var(--text-1); }
+.seg-tab.active {
+  background: var(--brand);
+  color: #fff;
+  font-weight: 600;
+}
+
+/* ---------- 搜索页排序 chip ---------- */
+.search-orders {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+.search-order {
+  padding: 6px 16px;
+  border-radius: 999px;
+  font-size: 13px;
+  color: var(--text-2);
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  cursor: pointer;
+  transition: all .16s var(--ease);
+}
+.search-order:hover { color: var(--text-1); border-color: var(--line-strong); }
+.search-order.active {
+  background: var(--brand-soft);
+  border-color: var(--brand);
+  color: var(--brand);
+  font-weight: 600;
+}
+
+/* ---------- 无限滚动哨兵 ---------- */
+.scroll-sentinel {
+  height: 1px;
+  width: 100%;
+}
+
+/* ---------- 通用图标按钮 ---------- */
+.icon-btn {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--text-3);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  opacity: 0;
+  transition: all .16s var(--ease);
+  flex-shrink: 0;
+}
+.history-item:hover .icon-btn,
+.icon-btn:focus-visible { opacity: 1; }
+.icon-btn:hover { background: var(--bg-4); color: var(--text-1); }
+.icon-btn.del:hover { background: rgba(251, 114, 153, .18); color: var(--brand); }
+
+/* ---------- 搜索历史块 ---------- */
+.search-history-block {
+  grid-column: 1 / -1;
+}
+.search-history-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--text-2);
+  margin-bottom: 14px;
+}
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--text-3);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+.link-btn:hover { color: var(--brand); }
+
+/* ---------- 历史页底部操作 ---------- */
+.history-actions {
+  display: flex;
+  justify-content: center;
+  padding: 26px 0 10px;
+}
+
+/* ---------- 全屏播放页：歌词区 ---------- */
+.np-lyric {
+  position: relative;
+  height: 180px;
+  overflow: hidden;
+  mask-image: linear-gradient(to bottom, transparent, #000 22%, #000 78%, transparent);
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 22%, #000 78%, transparent);
+  margin: 4px 0 8px;
+}
+.np-lyric-inner {
+  position: absolute;
+  width: 100%;
+  transition: transform .3s var(--ease);
+  will-change: transform;
+}
+.lyric-line {
+  padding: 7px 0;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--text-3);
+  text-align: left;
+  transition: color .25s var(--ease), transform .25s var(--ease), font-size .25s var(--ease);
+  transform-origin: left center;
+}
+.lyric-line.active {
+  color: var(--brand);
+  font-size: 18px;
+  font-weight: 700;
+  transform: scale(1.02);
+}
+.lyric-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+/* ---------- 收藏夹 ---------- */
+.fav-login-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 80px 20px;
+  gap: 16px;
+  color: var(--text-3);
+}
+.fav-login-box .big-title { font-size: 17px; color: var(--text-1); }
+.fav-login-box .hint { font-size: 12px; line-height: 1.9; text-align: center; max-width: 460px; }
+.cookie-help {
+  font-size: 12px;
+  color: var(--text-3);
+  line-height: 1.8;
+  margin-bottom: 10px;
+  padding: 10px 14px;
+  background: var(--bg-3);
+  border-radius: 8px;
+  border-left: 3px solid var(--brand);
+}
+
+/* ---------- 视图通用容器（避免首屏抖动） ---------- */
+.view-search,
+.view-history,
+.view-favorites,
+.view-discover,
+.view-ranking {
+  min-height: 100%;
+}
+
+/* ---------- 播放模式徽标 ---------- */
+.mode-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  font-size: 9px;
+  padding: 1px 4px;
+  border-radius: 999px;
+  background: var(--brand);
+  color: #fff;
+  line-height: 1.4;
+}
+
+/* ==========================================================
+ * 登录弹层（扫码 / 网页 / Cookie）
+ * ========================================================== */
+.login-body { min-width: 340px; }
+
+.qr-login {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.qr-img-box {
+  position: relative;
+  width: 220px;
+  height: 220px;
+  padding: 12px;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 2px 14px rgba(0, 0, 0, .3);
+}
+.qr-img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  image-rendering: pixelated;
+  transition: opacity .2s var(--ease);
+}
+.qr-mask {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  background: rgba(0, 0, 0, .72);
+  border-radius: 12px;
+  color: #fff;
+  font-size: 13px;
+  cursor: pointer;
+  text-align: center;
+  padding: 16px;
+  line-height: 1.7;
+}
+.qr-status {
+  margin-top: 14px;
+  font-size: 13px;
+  color: var(--text-2);
+  text-align: center;
+  transition: color .2s;
+}
+.qr-status.scanned { color: var(--accent); }
+.qr-status.success { color: #2ecc71; font-weight: 600; }
+.qr-status.error { color: var(--brand); }
+
+/* 头像是扫码登录成功后的过渡 */
+.login-success {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 24px 0;
+}
+.login-success .avatar-big {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  background: var(--bg-3);
+  background-size: cover;
+  background-position: center;
+}
+.login-success .name { font-size: 16px; font-weight: 600; }
+
+
+/* ==========================================================
+ * 覆盖层容器修正
+ * #app 是 grid（titlebar / main / playbar 三行），nowplaying-root
+ * 和 queue-root 作为额外子元素会把 grid 撑乱，必须脱离文档流。
+ * ========================================================== */
+#nowplaying-root,
+#queue-root {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  pointer-events: none;
+}
+#nowplaying-root > .np-overlay,
+#queue-root > .queue-mask,
+#queue-root > .queue-panel {
+  pointer-events: auto;
+}
+#queue-root { z-index: 950; }
+#nowplaying-root { z-index: 900; }
+#modal-root { position: fixed; inset: 0; z-index: 1000; pointer-events: none; }
+#modal-root > .modal-mask { pointer-events: auto; }
+#toast-root { position: fixed; top: 70px; left: 50%; transform: translateX(-50%); z-index: 2000; pointer-events: none; }
+
+/* 标题栏窗口按钮（theme-toggle 复用 .win-btn） */
+.win-btn {
+  width: 36px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  color: var(--text-2);
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+  transition: background .14s var(--ease), color .14s var(--ease);
+}
+.win-btn:hover { background: var(--bg-3); color: var(--text-1); }
+
+/* 倍速 / 定时 的临时弹层 */
+.rate-menu {
+  position: absolute;
+  bottom: 100%;
+  right: 0;
+  margin-bottom: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  z-index: 20;
+  min-width: 120px;
+}
+.np-secondary { position: relative; }
+

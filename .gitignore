@@ -1,0 +1,17 @@
+# 大体积拆包/构建产物（不上传仓库）
+apk/
+decoded/
+dist/
+dexstrings.txt
+
+# 依赖
+node_modules/
+app/node_modules/
+
+# 运行时
+*.log
+.vscode/
+
+# 本地配置（Cookie 等敏感信息）
+config.json
+bili-listen-config.json
