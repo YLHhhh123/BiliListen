@@ -430,7 +430,7 @@ play_list_menu (48dip 图标按钮)
 想自己复核上述任何一条，按这个顺序：
 
 ```powershell
-cd E:\rea\bili-listen
+cd bili-listen
 
 # 1) 看模块规模
 (Get-ChildItem decoded\smali\smali_classes16\com\bilibili\music\podcast -Recurse -Filter *.smali).Count   # 521

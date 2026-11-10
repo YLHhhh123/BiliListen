@@ -3,7 +3,7 @@
 把 B 站手机客户端的「听视频」功能搬到 Windows 桌面上：**只拉音频流，不拉视频流**，省流量、省电、能后台挂着当音乐播放器用。
 
 ```
-E:\rea\bili-listen\
+bili-listen/
 ├── apk\bilibili-latest.apk        # 拆包目标（B 站 Android v8.91.1）
 ├── decoded\apktool\               # apktool 解包产物（资源/Manifest）
 ├── decoded\smali\                 # baksmali 产物（38 个 dex → 521 个 podcast smali）
@@ -48,7 +48,7 @@ E:\rea\bili-listen\
 ## 快速开始
 
 ```powershell
-cd E:\rea\bili-listen\app
+cd app
 npm start          # 或双击 start.bat
 ```
 
@@ -57,7 +57,7 @@ npm start          # 或双击 start.bat
 ## 自动化验收
 
 ```powershell
-cd E:\rea\bili-listen\app
+cd app
 node scripts\verify.js
 ```
 
@@ -91,9 +91,9 @@ PASS 10. 队列抽屉打开
 ## 打包
 
 ```powershell
-cd E:\rea\bili-listen\app
+cd app
 node scripts\build.js
-# 产物：E:\rea\bili-listen\dist\BiliListen-win32-x64\  (213.8 MB)
+# 产物：dist\BiliListen-win32-x64\  (213.8 MB)
 ```
 
 产物已实测可启动（`verify-packaged.js` 9/9）：20 张卡片、点播出声、图片代理 200/41KB、6 档倍速、全屏播放页、设置页完整。

@@ -2,7 +2,7 @@
 
 ## 0. 你的任务
 
-在 `E:\rea\bili-listen\app\src\` 下**从零实现**一套完整的桌面端「听视频」前端界面。
+在 `app\src\` 下**从零实现**一套完整的桌面端「听视频」前端界面。
 主进程（Electron）与后端服务已经写好，**不要改 `app/electron/` 下任何文件**，只写 `app/src/` 里的东西。
 
 技术栈要求：**原生 HTML + CSS + 原生 ES Module JavaScript**。不要引入 React/Vue/构建工具，不要 npm install 新依赖。Electron 27 的 Chromium 118，支持 ES2022、CSS 嵌套不要用（118 不支持原生嵌套，用普通选择器）。
@@ -238,7 +238,7 @@ bili.reportPlayerState(state) // { playing:boolean, title:string }  用于托盘
 
 ## 6. 验收标准
 
-1. `cd E:\rea\bili-listen\app && npx electron .` 能直接启动，无控制台报错。
+1. `cd app && npx electron .` 能直接启动，无控制台报错。
 2. 发现页能加载出真实 B 站视频卡片（有封面、标题、UP 主、时长）。
 3. 点任意卡片能出声（默认 192K 音质），底部播放条同步显示。
 4. 拖动进度条能 seek，音量/倍速生效。

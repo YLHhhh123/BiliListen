@@ -1,6 +1,6 @@
 # B 站手机版「听视频」拆包逆向笔记
 
-目标 APK：`E:\rea\bili-listen\apk\bilibili-latest.apk`（tv.danmaku.bili v8.91.1，versionCode 8911100，182.9 MB，SHA-256 `e6f1adee9b96ce9eb79001f27ab0688b5c1712f3c635bc9d6e2db82d1a9c30c8`）
+目标 APK：`apk\bilibili-latest.apk`（tv.danmaku.bili v8.91.1，versionCode 8911100，182.9 MB，SHA-256 `e6f1adee9b96ce9eb79001f27ab0688b5c1712f3c635bc9d6e2db82d1a9c30c8`）
 
 > 顺带对照了本机另一份 `A:\Work\Astrbot\apks\bilibili.apk`（v9.10.0），类名/接口完全一致，只是版本号更高。
 
