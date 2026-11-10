@@ -138,6 +138,13 @@ async function boot() {
     }
   });
 
+  // 6.5 系统浏览器登录成功推送（浏览器回传 Cookie，主进程校验落盘后广播）
+  bili.onLoginCaptured?.((u) => {
+    if (!u) return;
+    store.set({ user: u });
+    toast.success(`欢迎回来，${u.uname || ''}`);
+  });
+
   // 7. 状态上报（托盘 tooltip 用）
   store.subscribe((s) => {
     bili.reportPlayerState({ playing: s.isPlaying, title: s.playing?.title || '' });

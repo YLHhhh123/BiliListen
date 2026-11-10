@@ -79,9 +79,9 @@ const check = (n, ok, d = '') => { results.push({ n, ok }); console.log(`${ok ? 
     const poll = await cdp.eval(`window.bili.qrLoginPoll(${JSON.stringify(qr.authCode)}).then(r=>r.ok?{status:r.data.status}:{err:r.error})`);
     check('3. 扫码：轮询状态正常', poll.status === 'waiting' || poll.status === 'scanned', JSON.stringify(poll));
 
-    // 4. 网页登录：检查 IPC 存在（不真的开窗，避免打扰）
-    const webFn = await cdp.eval(`typeof window.bili.webLogin`);
-    check('4. 网页登录：IPC 已注册', webFn === 'function', webFn);
+    // 4. 浏览器登录：检查 IPC 存在（不真的拉起浏览器，避免打扰）
+    const webFn = await cdp.eval(`typeof window.bili.browserLogin`);
+    check('4. 浏览器登录：IPC 已注册', webFn === 'function', webFn);
 
     // 5. Cookie 登录：空 Cookie 应报错而不是崩
     const badCookie = await cdp.eval(`window.bili.login('').then(r=>({ok:r.ok,isLogin:r.data?.isLogin,err:r.error}))`);

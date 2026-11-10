@@ -1,6 +1,6 @@
 // ===== 登录弹层：三种方式 =====
 // 1) 扫码登录（主推，TV 端接口，二维码画在应用里）
-// 2) 网页登录（弹 B 站官方登录窗口，扫码/密码都行，登录后自动捞 Cookie）
+// 2) 浏览器登录（拉起系统默认浏览器登录，成功后经本地回传服务收 Cookie）
 // 3) 粘贴 Cookie（兜底）
 
 import { bili } from '../api.js';
@@ -10,7 +10,8 @@ import { toast } from './toast.js';
 import { openModal, closeModal } from './modal.js';
 
 let pollTimer = null;
-let webLoginRunning = false;
+let browserLoginRunning = false;
+let unbindCapture = null;
 
 /**
  * @param {{ onSuccess?: Function, title?: string, defaultTab?: 'qr'|'web'|'cookie' }} opts
@@ -27,7 +28,7 @@ export function openLoginModal(opts = {}) {
 
   const TABS = [
     { key: 'qr', label: '扫码登录' },
-    { key: 'web', label: '网页登录' },
+    { key: 'web', label: '浏览器登录' },
     { key: 'cookie', label: 'Cookie' },
   ];
 
@@ -157,46 +158,60 @@ export function openLoginModal(opts = {}) {
     loadQr();
   }
 
-  // ---------- 网页登录 ----------
+  // ---------- 浏览器登录（拉起系统默认浏览器） ----------
   function renderWeb() {
     const btn = el('button', {
       class: 'btn primary',
-      text: '打开 B 站登录窗口',
+      text: '拉起系统默认浏览器登录',
       style: { width: '100%' },
-      onclick: async () => {
-        if (webLoginRunning) return;
-        webLoginRunning = true;
-        btn.disabled = true;
-        btn.textContent = '等待登录…（在弹出窗口里扫码或输密码）';
-        try {
-          const res = await bili.webLogin();
-          if (!res.ok) {
-            toast.error(res.error || '登录失败');
-            return;
-          }
-          if (res.data.cancelled) {
-            if (res.data.reason !== '用户关闭了登录窗口') toast.info(res.data.reason || '已取消');
-            return;
-          }
-          store.set({ user: res.data });
-          toast.success(`欢迎回来，${res.data.uname || ''}`);
-          closeModal();
-          onSuccess && onSuccess(res.data);
-        } finally {
-          webLoginRunning = false;
-          btn.disabled = false;
-          btn.textContent = '打开 B 站登录窗口';
-        }
-      },
+    });
+    const status = el('div', {
+      class: 'qr-status',
+      style: { marginTop: '12px', lineHeight: '1.9', textAlign: 'left', whiteSpace: 'pre-line' },
+      text: '',
     });
 
-    body.appendChild(btn);
+    btn.onclick = async () => {
+      if (browserLoginRunning) return;
+      browserLoginRunning = true;
+      btn.disabled = true;
+      btn.textContent = '正在拉起浏览器…';
+      try {
+        const res = await bili.browserLogin();
+        if (!res.ok) {
+          toast.error(res.error || '启动失败');
+          btn.textContent = '拉起系统默认浏览器登录';
+          return;
+        }
+        btn.textContent = '等待在浏览器里完成登录…';
+        status.textContent =
+          '① 在弹出的默认浏览器里正常登录 B 站（验证码/密码体验与平时完全一致）\n' +
+          '② 登录成功会跳到「回传页」，按页面提示把「回传 BiliListen」拖到书签栏\n' +
+          '③ 切回任意 bilibili.com 标签页，点书签「回传 BiliListen」，这里会自动完成登录';
+        bindCapture();
+      } finally {
+        browserLoginRunning = false;
+        btn.disabled = false;
+      }
+    };
+
+    body.append(btn, status);
     body.appendChild(
       el('div', { class: 'cookie-help', style: { marginTop: '14px' } }, [
-        el('div', { text: '会弹出一个独立的 B 站官方登录页（和浏览器里一样）。' }),
-        el('div', { text: '支持扫码、账号密码、短信、微信/微博/QQ。登录成功后自动读取 Cookie。' }),
+        el('div', { text: '不弹内置窗口：登录页直接跑在你的默认浏览器里，极验/滑块/密码管理器全部原生可用。' }),
+        el('div', { text: '回传书签只读取当前页面 Cookie 发往本机 127.0.0.1，不经任何第三方；书签保留后下次免拖拽。' }),
       ]),
     );
+  }
+
+  /** 订阅主进程「浏览器回传登录成功」推送（幂等） */
+  function bindCapture() {
+    if (unbindCapture) return;
+    unbindCapture = bili.onLoginCaptured((u) => {
+      if (unbindCapture) { unbindCapture(); unbindCapture = null; }
+      closeModal();
+      onSuccess && onSuccess(u);
+    });
   }
 
   // ---------- Cookie ----------
@@ -249,6 +264,10 @@ export function openLoginModal(opts = {}) {
     if (pollTimer) {
       clearInterval(pollTimer);
       pollTimer = null;
+    }
+    if (unbindCapture) {
+      unbindCapture();
+      unbindCapture = null;
     }
   }
 

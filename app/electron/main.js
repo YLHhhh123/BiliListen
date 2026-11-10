@@ -10,6 +10,7 @@ const bili = require('./services/bili');
 const tvLogin = require('./services/tv-login');
 const QRCode = require('qrcode');
 const { AudioProxy } = require('./services/proxy');
+const { BrowserLoginServer } = require('./services/browser-login');
 
 const isDev = process.argv.includes('--dev');
 /** 静默模式：不显示窗口、不进任务栏（自动化测试用） */
@@ -19,6 +20,7 @@ const PROXY_PORT = 45871;
 let win = null;
 let tray = null;
 let proxy = null;
+let browserLoginServer = null;
 let quitting = false;
 
 // ---------------- 配置持久化 ----------------
@@ -277,115 +279,15 @@ function registerIpc() {
 
   ipcMain.handle('api:loginStatus', wrap(async () => bili.checkLogin({ cookie: config.cookie })));
 
-  // ============ 网页版登录 ============
-  // 开一个独立分区的 BrowserWindow 加载 passport.bilibili.com，
-  // 用户自己扫码/输密码，登录成功后从 session 里把 Cookie 捞出来。
-  // 关键点：
-  //  1) 用独立 partition，避免和主窗口共用 session 造成 Cookie 污染
-  //  2) 轮询 session.cookies 检查 SESSDATA，比依赖页面 URL 跳转更可靠
-  //     （扫码登录成功后 passport 页面不一定会跳转，只在 XHR 里种 Cookie）
-  //  3) QR 登录的轮询接口是 /x/passport-login/web/qrcode/poll，需要放行
+  // ============ 系统浏览器登录 ============
+  // 不再内置 BrowserWindow（验证码/风控在 Electron 里脆弱），拉起系统默认浏览器登录，
+  // 登录后用户在 B 站标签页点「回传书签」，Cookie 经本地回环服务送回（services/browser-login.js）。
   ipcMain.handle(
-    'api:webLogin',
+    'api:browserLogin',
     wrap(async () => {
-      const part = 'persist:bili-login';
-      const sess = session.fromPartition(part);
-      sess.setUserAgent(bili.UA);
-
-      const loginWin = new BrowserWindow({
-        width: 420,
-        height: 640,
-        parent: win && !isHidden ? win : undefined,
-        modal: false,
-        show: true,
-        autoHideMenuBar: true,
-        title: '登录哔哩哔哩',
-        backgroundColor: '#ffffff',
-        webPreferences: {
-          partition: part,
-          nodeIntegration: false,
-          contextIsolation: true,
-          sandbox: true,
-        },
-      });
-
-      loginWin.loadURL('https://passport.bilibili.com/login');
-
-      // 去掉菜单栏和不需要的权限
-      loginWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-      sess.setPermissionRequestHandler((_wc, _perm, cb) => cb(false));
-
-      const extractCookie = async () => {
-        const cookies = await sess.cookies.get({});
-        const map = {};
-        for (const c of cookies) {
-          if (/(^|\.)bilibili\.com$/.test(c.domain) || c.domain.includes('bilibili')) {
-            map[c.name] = c.value;
-          }
-        }
-        if (!map.SESSDATA) return null;
-        return Object.entries(map)
-          .map(([k, v]) => `${k}=${v}`)
-          .join('; ');
-      };
-
-      return await new Promise((resolve) => {
-        let done = false;
-        let pollTimer = null;
-
-        const finish = async (ok, payload) => {
-          if (done) return;
-          done = true;
-          clearInterval(pollTimer);
-          clearTimeout(timeoutTimer);
-          try {
-            if (!loginWin.isDestroyed()) loginWin.close();
-          } catch {}
-          resolve(ok ? payload : { cancelled: true, reason: payload });
-        };
-
-        // 每 800ms 查一次 Cookie
-        pollTimer = setInterval(async () => {
-          if (loginWin.isDestroyed()) {
-            finish(false, '窗口已关闭');
-            return;
-          }
-          try {
-            const cookie = await extractCookie();
-            if (cookie) {
-              const status = await bili.checkLogin({ cookie });
-              if (status.isLogin) {
-                saveConfig({ cookie, user: status });
-                _wbiReset();
-                finish(true, { ...status, cookieLen: cookie.length });
-              }
-            }
-          } catch (e) {
-            // 静默，等下一轮
-          }
-        }, 800);
-
-        // 5 分钟超时
-        const timeoutTimer = setTimeout(() => finish(false, '登录超时（5 分钟）'), 5 * 60 * 1000);
-
-        loginWin.on('closed', () => finish(false, '用户关闭了登录窗口'));
-
-        // 页面跳转时也检查一次（有些登录路径会直接跳到 www.bilibili.com）
-        loginWin.webContents.on('did-navigate', async (_e, url) => {
-          if (!/bilibili\.com/.test(url)) return;
-          try {
-            const cookie = await extractCookie();
-            if (cookie) {
-              const status = await bili.checkLogin({ cookie });
-              if (status.isLogin) {
-                saveConfig({ cookie, user: status });
-                _wbiReset();
-                finish(true, { ...status, cookieLen: cookie.length });
-              }
-            }
-          } catch {}
-        });
-      });
+      await browserLoginServer.start();
+      await shell.openExternal(browserLoginServer.passportUrl);
+      return { landUrl: browserLoginServer.landUrl, port: browserLoginServer.port };
     }),
   );
 
@@ -503,6 +405,22 @@ if (!gotLock) {
     proxy.setResolver(resolveAudio);
     await proxy.start(PROXY_PORT);
     console.log('[proxy] listening on', proxy.port);
+
+    // 系统浏览器登录回传服务：本地回环收 Cookie → 官方接口校验 → 落盘 → 推送渲染层
+    browserLoginServer = new BrowserLoginServer();
+    browserLoginServer.onCapture = async (cookie) => {
+      const status = await bili.checkLogin({ cookie });
+      if (!status.isLogin) {
+        send('auth:loginCaptured', null);
+        return { ok: false, message: 'Cookie 校验失败：未登录或已过期' };
+      }
+      saveConfig({ cookie, user: status });
+      _wbiReset();
+      send('auth:loginCaptured', status);
+      return { ok: true, message: `登录成功：${status.uname || 'B 站用户'}，可以关掉本页回到 BiliListen` };
+    };
+    await browserLoginServer.start();
+    console.log('[browser-login] listening on', browserLoginServer.port);
 
     registerIpc();
     createWindow();

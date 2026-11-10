@@ -134,7 +134,7 @@ function renderLoginGuide() {
     el('div', { class: 'big-title', text: '登录后查看你的收藏夹' }),
     el('div', {
       class: 'hint',
-      text: '推荐用网页扫码登录：会弹出 B 站官方登录窗口，扫完自动接管 Cookie。也支持手动粘贴 Cookie。',
+      text: '推荐用扫码登录：手机 B 站 App 扫一下即完成。也可拉起系统浏览器登录，或手动粘贴 Cookie。',
     }),
     el('button', {
       class: 'btn primary',

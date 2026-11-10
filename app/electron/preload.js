@@ -18,7 +18,7 @@ contextBridge.exposeInMainWorld('bili', {
   login: (cookie) => invoke('api:login', { cookie }),
   qrLoginCreate: () => invoke('api:qrLoginCreate'),
   qrLoginPoll: (authCode) => invoke('api:qrLoginPoll', { authCode }),
-  webLogin: () => invoke('api:webLogin'),
+  browserLogin: () => invoke('api:browserLogin'),
   openBiliWeb: (url) => invoke('api:openBiliWeb', url),
   loginStatus: () => invoke('api:loginStatus'),
   logout: () => invoke('api:logout'),
@@ -44,6 +44,11 @@ contextBridge.exposeInMainWorld('bili', {
   platform: () => invoke('app:platform'),
 
   // 主进程 -> 渲染进程
+  onLoginCaptured: (cb) => {
+    const h = (_e, user) => cb(user);
+    ipcRenderer.on('auth:loginCaptured', h);
+    return () => ipcRenderer.removeListener('auth:loginCaptured', h);
+  },
   onPlayerCommand: (cb) => {
     const h = (_e, cmd) => cb(cmd);
     ipcRenderer.on('player:command', h);

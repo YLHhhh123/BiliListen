@@ -82,7 +82,7 @@ PASS 10. 队列抽屉打开
 |---|---|---|
 | `node scripts\verify-settings.js` | 发现页骨架卡清理 / 设置页 7 行 / 音质·倍速·托盘三项落盘 | **11/11** |
 | `node scripts\verify-packaged.js` | **打包版**（自动启动 `dist\BiliListen.exe`，验完自动关）：卡片/播放/6 档倍速/队列/全屏/倍速菜单/设置页 | **9/9** |
-| `node scripts\verify-login.js` | 扫码二维码生成 / 轮询 / 网页登录 IPC / Cookie 校验 / 三 Tab 弹层 | **8/8** |
+| `node scripts\verify-login.js` | 扫码二维码生成 / 轮询 / 浏览器登录 IPC / Cookie 校验 / 三 Tab 弹层 | **8/8** |
 
 > **测试全程静音 + 不弹窗**：`verify.js` 启动参数带 `--mute-audio --hidden`，主进程 `isHidden` 分支不调用 `win.show()`，任务栏都看不到窗口。
 >
@@ -199,7 +199,7 @@ B 站 2023 年起 Web API 要 `w_rid` 签名：
 | 方式 | 原理 | 状态 |
 |---|---|---|
 | **扫码登录（主推）** | B 站 TV 端接口，二维码画在应用内，手机 App 扫码确认 | ✅ 8/8 验收通过 |
-| 网页登录 | 弹独立窗口加载 `passport.bilibili.com/login`，登录后轮询 session 捞 Cookie | ✅ 页面完整渲染 |
+| 浏览器登录 | 拉起**系统默认浏览器**登录 passport，本地回环服务接收回传书签送回的 Cookie | ✅ 回传链路已验证 |
 | 粘贴 Cookie | 手动粘贴 `document.cookie` | ✅ 兜底 |
 
 ### 扫码登录是怎么做的
@@ -228,7 +228,7 @@ POST https://passport.bilibili.com/x/passport-tv-login/qrcode/poll
 
 这套是电视端「云视听小电视」的登录通道，等同在 TV 上登录，Cookie 由官方下发，全程不碰密码。
 
-**为什么不主推内嵌网页**：`passport.bilibili.com` 依赖大量风控脚本 + 跨域 iframe（`s1.hdslb.com/bfs/seed/jinkela/.../iframe.html`），Electron 里能跑但脆弱；而且扫码成功后页面不一定跳转，Cookie 只在 XHR 里种下，只能靠轮询 `session.cookies` 兜底。实测网页登录页能完整渲染（二维码/密码/短信/微信/微博/QQ 全部可用），作为备选保留。
+**为什么不内置登录窗口**：`passport.bilibili.com` 依赖大量风控脚本 + 跨域 iframe（`s1.hdslb.com/bfs/seed/jinkela/.../iframe.html`），Electron 内嵌窗口里跑得脆弱。现方案直接拉起系统默认浏览器：极验/滑块/密码管理器全部原生体验；登录后由回传页的「回传书签」（bookmarklet）把 `document.cookie` 发到本地回环 `127.0.0.1:45872/cb`，主进程先经官方接口校验登录态再落盘。内置 `BrowserWindow` 网页登录已移除。
 
 **验收结果（`node scripts/verify-login.js`，静默无窗口）：**
 
@@ -236,7 +236,7 @@ POST https://passport.bilibili.com/x/passport-tv-login/qrcode/poll
 PASS  1. 扫码登录：二维码生成          host=passport.bilibili.com imgLen=3986 exp=180
 PASS  2. 二维码指向官方 TV 登录域      /x/passport-tv-login/h5/qrcode/auth
 PASS  3. 扫码：轮询状态正常            waiting
-PASS  4. 网页登录：IPC 已注册          function
+PASS  4. 浏览器登录：IPC 已注册          function
 PASS  5. Cookie 登录：空值安全拒绝
 PASS  6. 登录态查询可用
 PASS  7. 登录弹层三 Tab               扫码登录 / 网页登录 / Cookie

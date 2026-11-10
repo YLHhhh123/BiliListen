@@ -32,7 +32,7 @@ export const bili = {
   login: wrap('login'),
   qrLoginCreate: wrap('qrLoginCreate'),
   qrLoginPoll: wrap('qrLoginPoll'),
-  webLogin: wrap('webLogin'),
+  browserLogin: wrap('browserLogin'),
   openBiliWeb: (u) => api.openBiliWeb?.(u),
   loginStatus: wrap('loginStatus'),
   logout: wrap('logout'),
@@ -50,6 +50,7 @@ export const bili = {
   proxyBase: () => api.proxyBase?.(),
   version: () => api.version?.(),
   platform: () => api.platform?.(),
+  onLoginCaptured: (cb) => api.onLoginCaptured?.(cb),
   onPlayerCommand: (cb) => api.onPlayerCommand?.(cb),
   reportPlayerState: (s) => api.reportPlayerState?.(s),
 };
