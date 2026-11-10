@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('bili', {
 
   // 账号
   login: (cookie) => invoke('api:login', { cookie }),
+  readClipboard: () => invoke('api:readClipboard'),
   qrLoginCreate: () => invoke('api:qrLoginCreate'),
   qrLoginPoll: (authCode) => invoke('api:qrLoginPoll', { authCode }),
   browserLogin: () => invoke('api:browserLogin'),

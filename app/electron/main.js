@@ -2,12 +2,25 @@
 /**
  * 主进程：窗口 / 托盘 / 全局媒体键 / IPC 网关 / 本地音频代理
  */
-const { app, BrowserWindow, ipcMain, Tray, Menu, globalShortcut, shell, nativeImage, dialog, session } = require('electron');
+const {
+  app,
+  BrowserWindow,
+  ipcMain,
+  Tray,
+  Menu,
+  globalShortcut,
+  shell,
+  nativeImage,
+  dialog,
+  session,
+  clipboard,
+} = require('electron');
 const path = require('path');
 const fs = require('fs');
 
 const bili = require('./services/bili');
 const tvLogin = require('./services/tv-login');
+const { parseCookieInput, completeCookie } = require('./services/cookie-import');
 const QRCode = require('qrcode');
 const { AudioProxy } = require('./services/proxy');
 
@@ -229,19 +242,48 @@ function registerIpc() {
   );
 
   // 账号
+  // ============ 粘贴 Cookie 登录（无需手机）============
+  // 接受两种粘贴：整行 Cookie（DevTools → Network → Request Headers），
+  // 或只复制 SESSDATA 的 Value（DevTools → Application → Cookies）。
+  // 注意 SESSDATA 是 HttpOnly，document.cookie 拿不到 —— 这个错误提示必须写清楚。
   ipcMain.handle(
     'api:login',
-    wrap(async ({ cookie }) => {
-      const status = await bili.checkLogin({ cookie });
-      if (status.isLogin) {
-        saveConfig({ cookie, user: status });
-        try {
-          await bili.getPlayUrl; // noop
-        } catch {}
-        _wbiReset();
+    wrap(async ({ cookie, raw }) => {
+      const parsed = parseCookieInput(raw != null ? raw : cookie);
+
+      if (!parsed.hasSessdata) {
+        const e = new Error(
+          '这串 Cookie 里没有 SESSDATA。\n' +
+            'SESSDATA 是 HttpOnly，document.cookie 里永远读不到它。\n' +
+            '请按面板下方「怎么拿到 SESSDATA」从 DevTools 的 Application → Cookies 复制。',
+        );
+        e.code = 'NO_SESSDATA';
+        throw e;
       }
+
+      const status = await bili.checkLogin({ cookie: parsed.cookie });
+      if (!status.isLogin) {
+        const e = new Error(
+          status.message && status.message !== '账号未登录'
+            ? `登录校验失败：${status.message}`
+            : 'SESSDATA 无效或已过期，请重新复制一份',
+        );
+        e.code = status.code || 'INVALID_SESSION';
+        throw e;
+      }
+
+      // 部分接口（收藏夹、历史）要 DedeUserID，用户只给了 SESSDATA 时补上
+      const finalCookie = completeCookie(parsed, status);
+      saveConfig({ cookie: finalCookie, user: status });
+      _wbiReset();
       return status;
     }),
+  );
+
+  // 读取系统剪贴板（方便从 DevTools 复制的值一键粘进面板）
+  ipcMain.handle(
+    'api:readClipboard',
+    wrap(async () => ({ text: String(clipboard.readText() || '') })),
   );
   // ============ TV 端扫码登录（主方案）============
   // 不用开浏览器窗口：直接向 passport 的 TV 登录接口要 auth_code，

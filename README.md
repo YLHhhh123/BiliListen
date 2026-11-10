@@ -83,6 +83,7 @@ PASS 10. 队列抽屉打开
 | `node scripts\verify-settings.js` | 发现页骨架卡清理 / 设置页 7 行 / 音质·倍速·托盘三项落盘 | **11/11** |
 | `node scripts\verify-packaged.js` | **打包版**（自动启动 `dist\BiliListen.exe`，验完自动关）：卡片/播放/6 档倍速/队列/全屏/倍速菜单/设置页 | **9/9** |
 | `node scripts\verify-login.js` | 扫码二维码生成 / 轮询 / 浏览器登录 IPC / Cookie 校验 / 三 Tab 弹层 | **8/8** |
+| `node scripts\verify-cookie-import.js` | 粘贴 Cookie 的解析（裸值/整行/脏输入/头注入）+ 落盘补全 + 假凭据必须被拒 | **15/15** |
 
 > **测试全程静音 + 不弹窗**：`verify.js` 启动参数带 `--mute-audio --hidden`，主进程 `isHidden` 分支不调用 `win.show()`，任务栏都看不到窗口。
 >
@@ -194,13 +195,28 @@ B 站 2023 年起 Web API 要 `w_rid` 签名：
 
 ---
 
-## 二、登录（三套方案）
+## 二、登录（三套方案，全都不依赖手机）
 
 | 方式 | 原理 | 状态 |
 |---|---|---|
-| **扫码登录（主推）** | B 站 TV 端接口，二维码画在应用内，手机 App 扫码确认 | ✅ 8/8 验收通过 |
-| 应用内登录窗口 | 独立浏览器分区打开 passport，主进程直读该分区 Cookie（含 HttpOnly 的 `SESSDATA`） | ✅ 开窗 / 读 Cookie 链路已验证 |
-| 粘贴 Cookie | 手动粘贴 `document.cookie` | ✅ 兜底 |
+| **粘贴 Cookie（最省事）** | 从浏览器 DevTools 的 `Application → Cookies` 复制 `SESSDATA` 的 Value（它是 **HttpOnly**，控制台里 `document.cookie` 永远读不到），应用内解析 + `/x/web-interface/nav` 校验后落盘 | ✅ 15/15 验收通过 |
+| **窗口登录（免扫码）** | 独立浏览器分区（`persist:bili-login`）打开 passport 登录页，可用其中的「密码登录」；主进程直读该分区 Cookie | ✅ 开窗 / 读 Cookie 链路已验证 |
+| 扫码登录 | B 站 TV 端接口，二维码画在应用内，手机 App 扫码确认 | ✅ 8/8 验收通过 |
+
+### 没有手机怎么登录
+
+两条路都不需要手机，也不需要扫码：
+
+1. **窗口登录 → 密码登录**：登录弹层切到「窗口登录」，在弹出的窗口里选「密码登录」页签，账号可以是邮箱 / 用户名 / 手机号，出现滑块就用鼠标拖。
+2. **粘贴 Cookie**：如果电脑浏览器里已经登录着 B 站，直接把这台机器的登录态搬过来。
+   - 浏览器打开 `bilibili.com` → `F12` → `Application（应用）` → `Storage → Cookies → https://www.bilibili.com`
+   - 找到 `SESSDATA` 那一行，双击 `Value` 全选复制
+   - 回到应用的「粘贴 Cookie」页签 → 「从剪贴板粘贴」→ 「登录」
+   - 也可以从 `Network → 任意请求 → Request Headers → Cookie` 复制整行，两种格式都认
+
+> 为什么不能像以前那样「在浏览器里敲 `document.cookie` 再贴进来」：`SESSDATA` 是 `HttpOnly`，`document.cookie` 里根本没有它。应用会认出来并直接告诉你这一点，而不是给你一句「登录失败」。
+>
+> 应用内粘贴面板会做三件事：解析（裸值 / 整行 / 带 `Cookie:` 前缀 / 多行都认）、校验（`nav` 接口确认真的登录了才落盘）、补全（用 `mid` 自动补 `DedeUserID`，收藏夹和历史接口要用）。
 
 ### 扫码登录是怎么做的
 
@@ -241,9 +257,20 @@ PASS  3. 扫码：轮询状态正常            waiting
 PASS  4. 浏览器登录：IPC 已注册          function
 PASS  5. Cookie 登录：空值安全拒绝
 PASS  6. 登录态查询可用
-PASS  7. 登录弹层三 Tab               扫码登录 / 网页登录 / Cookie
+PASS  7. 登录弹层三 Tab               扫码登录 / 窗口登录 / 粘贴 Cookie
 PASS  8. 弹层内二维码实际渲染           naturalWidth=280
 ```
+
+**粘贴 Cookie 专项验收（`node scripts/verify-cookie-import.js`）：**
+
+```
+[1] 解析：粘贴形态                 5/5   裸 SESSDATA / 整行 / 带前缀 / 多行 / 脏串
+[2] 解析：错误输入                 5/5   空值 / 无 SESSDATA / 自由文本 / 控制字符 / 头注入
+[3] 落盘前补全 Cookie              3/3   自动补 DedeUserID、不重复、无 mid 不造脏字段
+[4] 真实接口登录态判定             2/2   假 SESSDATA 必须判未登录
+```
+
+> 第 [2] 组里那条「无 SESSDATA」用例就是专门守 `document.cookie` 这个坑的：把 `buvid3=...; b_nut=...` 这种串贴进去，应用必须认出来并提示「SESSDATA 是 HttpOnly，去 Application 面板复制」。
 
 ---
 

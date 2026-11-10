@@ -30,6 +30,7 @@ export const bili = {
   subtitle: wrap('subtitle'),
   resolve: wrap('resolve'),
   login: wrap('login'),
+  readClipboard: wrap('readClipboard'),
   qrLoginCreate: wrap('qrLoginCreate'),
   qrLoginPoll: wrap('qrLoginPoll'),
   browserLogin: wrap('browserLogin'),

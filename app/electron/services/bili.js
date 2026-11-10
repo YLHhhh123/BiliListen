@@ -386,6 +386,9 @@ async function checkLogin({ cookie } = {}) {
     face: d.face || '',
     vip: d.vipStatus === 1,
     level: d.level_info?.current_level ?? 0,
+    // 留出原始返回，便于把「风控 / 过期」这类失败原因讲清楚
+    code: j.code || 0,
+    message: j.message || '',
   };
 }
 

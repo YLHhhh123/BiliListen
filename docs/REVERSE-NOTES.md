@@ -127,7 +127,7 @@ GET https://api.bilibili.com/x/player/wbi/playurl
 |---|---|---|
 | **TV 端扫码（主推）** | `POST /x/passport-tv-login/qrcode/auth_code` + `/poll` | ✅ 二维码生成正常，轮询返回 `86039 等待` |
 | 网页登录（内嵌窗口） | 独立分区（`persist:bili-login`）的 `BrowserWindow` 打开 `passport.bilibili.com/login`，主进程用 `session.cookies.get()` 直读该分区 Cookie 取 `SESSDATA`（HttpOnly，`document.cookie` 与 gourl 回传都拿不到），`checkLogin` 校验后落盘 | ✅ 开窗与页面渲染已验证 |
-| 手动 Cookie | `document.cookie` 粘贴 + `/x/web-interface/nav` 校验 | ✅ 兜底方案 |
+| 手动 Cookie | 从浏览器 DevTools 的 `Application → Cookies` 复制 `SESSDATA`（HttpOnly，`document.cookie` 拿不到），应用内解析 + `/x/web-interface/nav` 校验后落盘 | ✅ 15/15 通过（`verify-cookie-import.js`） |
 
 ### TV 扫码接口细节（这套是桌面/TV 端的正解）
 

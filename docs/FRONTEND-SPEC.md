@@ -169,7 +169,7 @@ bili.reportPlayerState(state) // { playing:boolean, title:string }  用于托盘
 ### 3.12 我的收藏
 - 未登录：显示登录引导页（大按钮「扫码/粘贴 Cookie 登录」）。
 - 已登录：左侧收藏夹列表（文件夹图标+名称+数量），右侧该收藏夹内容网格。
-- 登录弹层：说明如何从浏览器复制 Cookie（`SESSDATA` 等），一个多行 textarea + 「登录」按钮，自动 trim。
+- 登录弹层：三个页签 —— 扫码登录 / 窗口登录 / 粘贴 Cookie。粘贴 Cookie 页签是一个多行 textarea（裸 `SESSDATA` 值或整行 Cookie 都认）+「从剪贴板粘贴」+「登录」，下方可展开「怎么拿到 SESSDATA」的步骤说明（`SESSDATA` 是 HttpOnly，`document.cookie` 读不到，必须从 `Application → Cookies` 复制）；失败原因就近显示在面板里，不弹 toast 了事。
 
 ### 3.13 设置页
 - 默认音质：64K / 132K / 192K / 杜比 / Hi-Res（下拉）。
