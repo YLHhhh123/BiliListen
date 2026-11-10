@@ -61,9 +61,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     return r.result.value;
   };
 
-  // 0 重置到干净起点（重载页面，避免上次测试留下的路由/状态）
+  // 0 重置到干净起点（重载页面 + 回发现页，避免上次停留的页面/状态干扰断言）
   await ev(`location.reload()`);
   await sleep(4000);
+  await ev(`(async()=>{const b=document.querySelector('.sidebar-item[data-key="discover"]');if(b){b.click();await new Promise(r=>setTimeout(r,1500));}})()`);
+  await sleep(500);
 
   let pass = 0, fail = 0;
   const check = (n, c, d) => { c ? (pass++, console.log(`PASS  ${n}${d ? '  — ' + d : ''}`)) : (fail++, console.log(`FAIL  ${n}${d ? '  — ' + d : ''}`)); };

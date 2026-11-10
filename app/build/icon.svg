@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.4" y2="1">
+      <stop offset="0" stop-color="#2b1b26"/>
+      <stop offset="0.55" stop-color="#171218"/>
+      <stop offset="1" stop-color="#0e0d12"/>
+    </linearGradient>
+    <linearGradient id="pink" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#fb7299"/>
+      <stop offset="0.55" stop-color="#ff92b3"/>
+      <stop offset="1" stop-color="#ffd7e3"/>
+    </linearGradient>
+    <linearGradient id="glow" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fb7299" stop-opacity="0.42"/>
+      <stop offset="1" stop-color="#fb7299" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="512" height="512" rx="116" fill="url(#bg)"/>
+  <circle cx="150" cy="120" r="180" fill="url(#glow)"/>
+
+  <!-- 耳机头梁 -->
+  <path d="M132 306v-42a124 124 0 0 1 248 0v42" fill="none" stroke="url(#pink)"
+        stroke-width="38" stroke-linecap="round"/>
+  <!-- 左右耳罩 -->
+  <rect x="88" y="284" width="78" height="126" rx="39" fill="url(#pink)"/>
+  <rect x="346" y="284" width="78" height="126" rx="39" fill="url(#pink)"/>
+
+  <!-- 中间音量条 -->
+  <g fill="#ffffff">
+    <rect x="204" y="316" width="17" height="62" rx="8.5" opacity="0.92"/>
+    <rect x="247" y="292" width="17" height="110" rx="8.5" opacity="0.98"/>
+    <rect x="290" y="330" width="17" height="34" rx="8.5" opacity="0.85"/>
+  </g>
+</svg>

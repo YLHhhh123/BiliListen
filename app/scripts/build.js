@@ -1,122 +1,116 @@
 'use strict';
 /**
- * 打包脚本（不依赖 electron-builder，纯手工拼目录 + 复制）
- * 产物：dist/BiliListen-win32-x64/BiliListen.exe
+ * 打包脚本：electron-builder → Windows 安装包
  *
- * 用法：node scripts/build.js
+ * 产物（都在 ..\dist 下）：
+ *   BiliListen-Setup-<版本>.exe   安装包：下一步 → 下一步 → 桌面图标 → 打开即用
+ *   BiliListen-win32-x64\         免安装目录版：整个文件夹拷走也能跑
+ *   latest.yml                    自动更新用的元数据（暂时没接更新服务器）
+ *
+ * 用法：node scripts\build.js
+ *      node scripts\build.js --dir     只出目录版，不压安装包（快，验收用）
  */
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 
 const root = path.join(__dirname, '..');
-const outRoot = path.join(root, '..', 'dist');
-const appDir = path.join(outRoot, 'BiliListen-win32-x64');
-const resourcesApp = path.join(appDir, 'resources', 'app');
-const electronDist = path.join(root, 'node_modules', 'electron', 'dist');
+const distDir = path.join(root, '..', 'dist');
+const unpackedDir = path.join(distDir, 'win-unpacked');
+const portableDir = path.join(distDir, 'BiliListen-win32-x64');
+const iconPath = path.join(root, 'build', 'icon.ico');
+const dirOnly = process.argv.includes('--dir');
 
 function rmrf(p) {
-  if (fs.existsSync(p)) fs.rmSync(p, { recursive: true, force: true });
+  if (fs.existsSync(p)) fs.rmSync(p, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }
 
-function copyDir(src, dst, filter) {
-  fs.mkdirSync(dst, { recursive: true });
-  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
-    const s = path.join(src, entry.name);
-    const d = path.join(dst, entry.name);
-    if (filter && !filter(s, entry)) continue;
-    if (entry.isDirectory()) copyDir(s, d, filter);
-    else if (entry.isFile()) fs.copyFileSync(s, d);
-  }
-}
-
-console.log('[build] 清理输出目录');
-rmrf(outRoot);
-fs.mkdirSync(appDir, { recursive: true });
-
-console.log('[build] 复制 Electron 运行时');
-copyDir(electronDist, appDir);
-
-console.log('[build] 复制应用代码');
-copyDir(path.join(root, 'electron'), path.join(resourcesApp, 'electron'));
-copyDir(path.join(root, 'src'), path.join(resourcesApp, 'src'));
-copyDir(path.join(root, 'assets'), path.join(resourcesApp, 'assets'));
-fs.copyFileSync(path.join(root, 'package.json'), path.join(resourcesApp, 'package.json'));
-
-// 复制运行时依赖（qrcode 等；electron 本身是 devDependency 不需要）
-console.log('[build] 复制运行时依赖');
-const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
-const runtimeDeps = Object.keys(pkg.dependencies || {});
-
-/** 递归复制一个包及其全部传递依赖 */
-const copied = new Set();
-function copyPackageWithDeps(name, depth = 0) {
-  if (copied.has(name) || depth > 6) return;
-  const src = path.join(root, 'node_modules', name);
-  if (!fs.existsSync(src)) {
-    console.warn('  ! 缺少依赖 ' + name);
-    return;
-  }
-  copyDir(src, path.join(resourcesApp, 'node_modules', name));
-  copied.add(name);
-  console.log('  + ' + name);
+/** dist 里正在运行的本程序会锁住 exe，先结束掉（只动 dist 目录里的进程） */
+function stopRunningFromDist() {
   try {
-    const p = JSON.parse(fs.readFileSync(path.join(src, 'package.json'), 'utf8'));
-    for (const d of Object.keys({ ...(p.dependencies || {}), ...(p.optionalDependencies || {}) })) {
-      copyPackageWithDeps(d, depth + 1);
-    }
+    const ps = [
+      '-NoProfile',
+      '-Command',
+      `Get-Process | Where-Object { $_.Path -like '${distDir.replace(/'/g, "''")}\\*' } | Stop-Process -Force -ErrorAction SilentlyContinue`,
+    ];
+    execFileSync('powershell', ps, { stdio: 'ignore' });
   } catch {}
 }
 
-if (runtimeDeps.length) {
-  runtimeDeps.forEach((d) => copyPackageWithDeps(d));
-} else {
-  copyPackageWithDeps('qrcode');
+if (!fs.existsSync(iconPath)) {
+  console.error('[build] 缺少 build/icon.ico，先跑：npx electron scripts/make-icon.js');
+  process.exit(1);
 }
 
-// 精简：删掉不需要的多语言包（保留 zh-CN / en-US）
-const localesDir = path.join(appDir, 'locales');
-if (fs.existsSync(localesDir)) {
-  for (const f of fs.readdirSync(localesDir)) {
-    if (!/^(zh-CN|en-US)\.pak$/.test(f)) fs.rmSync(path.join(localesDir, f));
-  }
+console.log('[build] 清理 dist（并结束里面正在运行的旧版本）');
+stopRunningFromDist();
+rmrf(distDir);
+fs.mkdirSync(distDir, { recursive: true });
+
+// 注意：本机全局有 ELECTRON_RUN_AS_NODE=1，不清掉会让 electron 退化成纯 node
+const env = { ...process.env };
+delete env.ELECTRON_RUN_AS_NODE;
+
+const cli = path.join(root, 'node_modules', 'electron-builder', 'out', 'cli', 'cli.js');
+const args = [cli, '--win', ...(dirOnly ? ['dir'] : ['nsis']), '--x64'];
+console.log(`[build] electron-builder ${args.slice(1).join(' ')}`);
+execFileSync(process.execPath, args, { cwd: root, stdio: 'inherit', env });
+
+// electron-builder 输出目录固定叫 win-unpacked；改成产品名，也方便老脚本/用户认
+if (fs.existsSync(unpackedDir)) {
+  fs.renameSync(unpackedDir, portableDir);
 }
 
-// 重命名 exe
-const electronExe = path.join(appDir, 'electron.exe');
-const targetExe = path.join(appDir, 'BiliListen.exe');
-if (fs.existsSync(electronExe)) fs.renameSync(electronExe, targetExe);
+const exePath = path.join(portableDir, 'BiliListen.exe');
+if (!fs.existsSync(exePath)) {
+  console.error('[build] 没有生成 BiliListen.exe，检查 electron-builder 输出');
+  process.exit(1);
+}
 
-// 写启动器（清 ELECTRON_RUN_AS_NODE）
 fs.writeFileSync(
-  path.join(appDir, '启动 BiliListen.bat'),
+  path.join(portableDir, '启动 BiliListen.bat'),
   '@echo off\r\nset ELECTRON_RUN_AS_NODE=\r\ncd /d "%~dp0"\r\nstart "" "BiliListen.exe"\r\n',
   'utf8',
 );
 
-// 写 README
 fs.writeFileSync(
-  path.join(appDir, 'README.txt'),
+  path.join(portableDir, 'README.txt'),
   [
     'BiliListen · 哔哩哔哩听视频桌面版',
     '================================',
     '',
-    '启动方式：双击「启动 BiliListen.bat」或 BiliListen.exe',
+    '这是免安装目录版：双击 BiliListen.exe 即可运行，整个文件夹可以拷到 U 盘。',
+    '想要「装到本机 + 桌面图标」，用同目录上一层的 BiliListen-Setup-*.exe。',
     '',
     '功能：',
     '  - 纯音频播放 B 站视频（不拉视频流，省流量）',
     '  - 后台/托盘常驻播放，支持全局媒体键',
     '  - 播放队列、播放模式（顺序/循环/单曲/随机）',
-    '  - 倍速 0.75x - 2.0x',
+    '  - 倍速 0.5x - 2.0x',
     '  - 定时关闭',
     '  - 搜索 / 排行榜 / 收藏夹 / 最近在听',
+    '  - 关掉再开：队列、播放进度、登录态都还在',
     '',
-    '配置文件：%APPDATA%\\bili-listen-desktop\\bili-listen-config.json',
+    `数据目录：%APPDATA%\\BiliListen\\bili-listen-config.json`,
     '',
     '逆向自 B 站 Android 客户端 8.91.1 的 music_podcast 模块。',
   ].join('\r\n'),
   'utf8',
 );
 
-const size = execFileSync('powershell', ['-NoProfile', '-Command', `"{0:N1}" -f ((Get-ChildItem -Recurse '${appDir}' | Measure-Object -Property Length -Sum).Sum/1MB)`], { encoding: 'utf8' }).trim();
-console.log(`[build] 完成：${appDir}  (${size} MB)`);
+const mb = (p) => {
+  if (!fs.existsSync(p)) return 0;
+  const st = fs.statSync(p);
+  if (st.isFile()) return st.size / 1048576;
+  return fs.readdirSync(p, { withFileTypes: true }).reduce(
+    (n, e) => n + mb(path.join(p, e.name)),
+    0,
+  );
+};
+
+console.log('');
+console.log(`[build] 目录版：${portableDir}  (${mb(portableDir).toFixed(0)} MB)`);
+for (const f of fs.readdirSync(distDir)) {
+  if (!f.endsWith('.exe')) continue;
+  console.log(`[build] 安装包：${path.join(distDir, f)}  (${mb(path.join(distDir, f)).toFixed(0)} MB)`);
+}
