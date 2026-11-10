@@ -30,6 +30,16 @@ contextBridge.exposeInMainWorld('bili', {
   // 配置
   getAllConfig: () => invoke('store:getAll'),
   setConfig: (patch) => invoke('store:set', patch),
+  /** 同步写（beforeunload 里用，等不到 invoke 回包） */
+  setConfigSync: (patch) => {
+    try {
+      return ipcRenderer.sendSync('store:setSync', patch);
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  },
+  dataDir: () => invoke('store:dataDir'),
+  openDataDir: () => invoke('store:openDataDir'),
 
   // 窗口
   minimize: () => invoke('window:minimize'),

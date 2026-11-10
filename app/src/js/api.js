@@ -13,7 +13,11 @@ function wrap(name) {
         // 静默错误不在此 toast，由调用方决定；这里只返回结构化结果
         return { ok: false, error: msg, code: res?.code };
       }
-      return { ok: true, data: res.data };
+      // 主进程的 handler 有两种返回：包好的 {ok,data} 和直接返回业务对象
+      // （store:getAll / app:version / store:dataDir 这类）。这里统一成 data，
+      // 不然读配置会静默拿到 undefined —— 表现就是「设置改了重启又变回去」。
+      const wrapped = typeof res === 'object' && res !== null && 'ok' in res && 'data' in res;
+      return { ok: true, data: wrapped ? res.data : res };
     } catch (e) {
       return { ok: false, error: e.message || String(e) };
     }
@@ -42,6 +46,9 @@ export const bili = {
   history: wrap('history'),
   getAllConfig: wrap('getAllConfig'),
   setConfig: wrap('setConfig'),
+  setConfigSync: (patch) => api.setConfigSync?.(patch),
+  dataDir: wrap('dataDir'),
+  openDataDir: () => api.openDataDir?.(),
   minimize: () => api.minimize?.(),
   maximize: () => api.maximize?.(),
   close: () => api.close?.(),

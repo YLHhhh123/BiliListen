@@ -4,6 +4,13 @@
 const routes = {};
 let currentView = null;
 let currentKey = null;
+const navListeners = new Set();
+
+/** 订阅路由切换（用来记「上次停在哪一页」） */
+export function onNavigate(fn) {
+  navListeners.add(fn);
+  return () => navListeners.delete(fn);
+}
 
 export function register(name, module) {
   routes[name] = module;
@@ -11,6 +18,9 @@ export function register(name, module) {
 
 export function navigate(name, params = {}) {
   currentKey = name;
+  navListeners.forEach((fn) => {
+    try { fn(name, params); } catch (e) { console.error('[router listener]', e); }
+  });
   if (currentView && typeof currentView.unmount === 'function') {
     try { currentView.unmount(); } catch (e) { console.error('[router unmount]', e); }
   }

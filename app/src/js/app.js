@@ -7,9 +7,10 @@ import { bili } from './api.js';
 import { store, playHistory } from './store.js';
 import {
   initPlayer, togglePlay, seekBy, setVolume, toggleMute,
-  nextTrack, prevTrack, addToQueue, playVideo, getAudio,
+  nextTrack, prevTrack, addToQueue, playVideo, getAudio, restoreSession,
 } from './player.js';
-import { register, navigate } from './router.js';
+import { register, navigate, onNavigate } from './router.js';
+import { initSessionPersistence } from './session.js';
 import { mountTitlebar } from './components/titlebar.js';
 import { mountSidebar } from './components/sidebar.js';
 import { mountPlaybar } from './components/playbar.js';
@@ -79,6 +80,16 @@ async function boot() {
   }
   applyTheme(store.get().theme);
 
+  // 1.5 还原上次退出时的播放现场：队列、当前曲目、听到第几秒。
+  // 只摆回界面不自动出声 —— 开机就突然响是骚扰，用户点一下播放就接着听。
+  const cfg0 = store.get().config || {};
+  let restored = null;
+  try {
+    restored = restoreSession(cfg0.session);
+  } catch (e) {
+    console.warn('[app] 恢复播放现场失败', e.message);
+  }
+
   // 2. 播放内核（config 就位后初始化，volume/rate 才是对的）
   await initPlayer();
   // player.js 的 new Audio() 不在 DOM 里，document.querySelector('audio') 查不到
@@ -90,20 +101,23 @@ async function boot() {
   mountSidebar();
   mountPlaybar();
   mountQueue();
-  // 调试桥（CDP 自动化用；正式运行无影响）
-  try {
-    const dbg = await import('./debug-bridge.js');
-    dbg.installDebugBridge();
-  } catch (e) {
-    console.warn('[app] debug bridge 未加载', e.message);
+
+  // 3.1 从现在开始，队列和进度会自动写回磁盘
+  initSessionPersistence();
+  if (restored?.playing && restored.position > 5) {
+    const m = Math.floor(restored.position / 60);
+    const s = Math.floor(restored.position % 60);
+    toast.info(
+      `已恢复上次播放：${restored.playing.title || '上一首'}（${m}:${String(s).padStart(2, '0')}）`,
+    );
   }
-  // 全屏播放页：文件存在才挂
-  try {
-    const np = await import('./views/nowplaying.js');
-    np.mountNowPlaying();
-  } catch (e) {
-    console.warn('[app] nowplaying 未就绪，已跳过：', e.message);
-  }
+  // 调试桥（CDP 自动化用）与全屏播放页并行加载，少等两轮
+  const [dbgMod, npMod] = await Promise.all([
+    import('./debug-bridge.js').catch((e) => { console.warn('[app] debug bridge 未加载', e.message); return null; }),
+    import('./views/nowplaying.js').catch((e) => { console.warn('[app] nowplaying 未就绪，已跳过：', e.message); return null; }),
+  ]);
+  if (dbgMod) dbgMod.installDebugBridge();
+  if (npMod) npMod.mountNowPlaying();
 
   // 标题栏追加全局主题切换按钮（verify 用 [title*="主题"] 找它）
   const actions = document.querySelector('.titlebar-actions');
@@ -118,10 +132,15 @@ async function boot() {
     });
   }
 
-  // 4. 注册视图并进入首页
+  // 4. 注册视图并进入首页（优先 URL hash，其次上次停留的页面）
   await registerViews();
   const ROUTES = ['discover', 'ranking', 'search', 'favorites', 'history', 'settings'];
-  const initial = (location.hash || '').replace(/^#\/?/, '') || 'discover';
+  const savedRoute = ROUTES.includes(cfg0.lastRoute) ? cfg0.lastRoute : '';
+  const initial = (location.hash || '').replace(/^#\/?/, '') || savedRoute || 'discover';
+  onNavigate((name) => {
+    if (!ROUTES.includes(name)) return;
+    bili.setConfig({ lastRoute: name }).catch(() => {});
+  });
   navigate(ROUTES.includes(initial) ? initial : 'discover');
 
   // 5. 全局快捷键（输入框聚焦时跳过）
@@ -225,10 +244,30 @@ function mountSettings(container) {
   const clearBtn = el('button', {
     class: 'btn danger',
     onclick: () => {
-      try { localStorage.clear(); toast.success('本地缓存已清空'); }
-      catch { toast.error('清空失败'); }
+      try {
+        localStorage.clear();
+        // 播放队列/断点也是「缓存」的一部分，一起清掉，否则下次开机还会还原
+        bili.setConfig({ session: null }).catch(() => {});
+        store.set({ queue: [], currentIndex: -1, playing: null, isPlaying: false });
+        toast.success('本地缓存已清空');
+      } catch { toast.error('清空失败'); }
     },
   }, '清空本地缓存');
+
+  // 数据目录：配置、登录态、播放断点都在这一个文件夹里，卸载也不会删
+  const dataInfo = el('span', {
+    style: { color: 'var(--text-3, #888)', fontSize: '12px', maxWidth: '260px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  }, '…');
+  bili.dataDir().then((r) => {
+    if (!r.ok || !r.data) return;
+    const kb = (r.data.size || 0) / 1024;
+    dataInfo.textContent = `${r.data.path} · ${kb < 1 ? '<1' : kb.toFixed(0)} KB`;
+    dataInfo.title = r.data.path;
+  }).catch(() => {});
+  const openDirBtn = el('button', {
+    class: 'btn',
+    onclick: () => bili.openDataDir(),
+  }, '打开目录');
 
   const logoutBtn = el('button', {
     class: 'btn danger',
@@ -299,6 +338,8 @@ function mountSettings(container) {
       row('本地缓存', '清空搜索历史与播放记录', clearBtn),
       row('账号', '退出当前 B 站账号', logoutBtn),
       row('版本', 'BiliListen', verEl),
+      row('数据目录', '配置、登录态、播放进度（卸载不删除，重装自动恢复）',
+        el('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } }, [dataInfo, openDirBtn])),
       row('默认音质', '新歌单与首次播放使用的音质档位', qualitySel),
       el('div', { class: 'setting-row', style: { gap: '12px' } }, [
         el('div', {}, [

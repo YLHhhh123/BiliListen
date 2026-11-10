@@ -76,7 +76,7 @@ function renderLocal(box) {
 
   const wrap = el('div', { class: 'history-list' });
   list.forEach((it) => {
-    wrap.appendChild(historyRow(it, () => playVideo(it)));
+    wrap.appendChild(historyRow(it, () => playVideo(it, { startAt: it.lastPos || it.progress || 0 })));
   });
   box.appendChild(wrap);
 
@@ -127,7 +127,7 @@ async function renderCloud(box) {
 
   const wrap = el('div', { class: 'history-list' });
   cloudItems.forEach((it) => {
-    wrap.appendChild(historyRow(it, () => playVideo(it)));
+    wrap.appendChild(historyRow(it, () => playVideo(it, { startAt: it.lastPos || it.progress || 0 })));
   });
   box.appendChild(wrap);
 }

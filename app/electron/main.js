@@ -21,8 +21,16 @@ const fs = require('fs');
 const bili = require('./services/bili');
 const tvLogin = require('./services/tv-login');
 const { parseCookieInput, completeCookie } = require('./services/cookie-import');
-const QRCode = require('qrcode');
+const { ConfigStore } = require('./services/config-store');
 const { AudioProxy } = require('./services/proxy');
+
+// qrcode（拉 pngjs/canvas）只在真的点「扫码登录」时才需要，启动阶段不加载，
+// 冷启动能省掉一整轮依赖解析。
+let _qrcode = null;
+function QRCode() {
+  if (!_qrcode) _qrcode = require('qrcode');
+  return _qrcode;
+}
 
 const isDev = process.argv.includes('--dev');
 /** 静默模式：不显示窗口、不进任务栏（自动化测试用） */
@@ -36,48 +44,105 @@ const LOGIN_COOKIE_KEYS = ['SESSDATA', 'DedeUserID', 'DedeUserID__ckMd5', 'bili_
 let win = null;
 let tray = null;
 let proxy = null;
+let proxyReady = Promise.resolve();
 let loginWin = null;
 let loginPollTimer = null;
 let quitting = false;
 
-// ---------------- 配置持久化 ----------------
-const configPath = () => path.join(app.getPath('userData'), 'bili-listen-config.json');
-const defaultConfig = {
-  volume: 0.8,
-  rate: 1.0,
-  quality: 30280,
-  playMode: 'order', // order | loop | single | shuffle
-  cookie: '',
-  user: null,
-  sleepTimer: 0,
-  theme: 'dark',
-  showLyric: true,
-  autoNext: true,
-  minimizeToTray: true,
-  windowBounds: null,
-};
-let config = { ...defaultConfig };
+/** 启动本地音频代理。窗口不等它，首帧先出来。 */
+function startProxy() {
+  proxy = new AudioProxy();
+  proxy.setResolver(resolveAudio);
+  proxyReady = proxy
+    .start(PROXY_PORT)
+    .then(() => console.log('[proxy] listening on', proxy.port))
+    .catch((e) => console.error('[proxy] 启动失败，播放可能不可用：', e.message));
+  return proxyReady;
+}
 
-function loadConfig() {
-  try {
-    const raw = fs.readFileSync(configPath(), 'utf8');
-    config = { ...defaultConfig, ...JSON.parse(raw) };
-  } catch {
-    config = { ...defaultConfig };
+/** 代理端口（代理还没起来时也用固定端口，前端拼 URL 不会拿到空值） */
+function proxyPort() {
+  return (proxy && proxy.port) || PROXY_PORT;
+}
+
+// ---------------- 数据目录 ----------------
+// 目录名写死成 BiliListen，不跟着 package.json 的 name / productName 走：
+//   · 以后换打包方式、改显示名，用户数据都不会「凭空消失」
+//   · 早期版本（bili-listen-desktop）留下的数据自动迁移一次
+// 位置：%APPDATA%\BiliListen\  （卸载时保留，重装即恢复登录与队列）
+const DATA_DIR_NAME = 'BiliListen';
+const LEGACY_DIR_NAMES = ['bili-listen-desktop'];
+/** 迁移这几项就够：配置、登录用的 cookie 分区、Chromium 本地存储 */
+const MIGRATE_ITEMS = [
+  'bili-listen-config.json',
+  'bili-listen-config.json.bak',
+  'Local State',
+  'Preferences',
+  'Network',
+  'Cookies',
+  'Cookies-journal',
+  'Local Storage',
+  'Session Storage',
+];
+
+function migrateDataDir(target) {
+  if (fs.existsSync(path.join(target, '.migrated'))) return;
+  const appData = app.getPath('appData');
+  for (const name of LEGACY_DIR_NAMES) {
+    const src = path.join(appData, name);
+    if (!fs.existsSync(src) || path.resolve(src) === path.resolve(target)) continue;
+    let copied = 0;
+    for (const item of MIGRATE_ITEMS) {
+      const from = path.join(src, item);
+      const to = path.join(target, item);
+      if (!fs.existsSync(from) || fs.existsSync(to)) continue;
+      try {
+        fs.cpSync(from, to, { recursive: true, force: false, errorOnExist: false });
+        copied++;
+      } catch (e) {
+        console.warn('[data] 迁移跳过', item, e.message);
+      }
+    }
+    try {
+      fs.writeFileSync(
+        path.join(target, '.migrated'),
+        `from=${name}\nat=${new Date().toISOString()}\nitems=${copied}\n`,
+        'utf8',
+      );
+    } catch {}
+    console.log(`[data] 已从 ${name} 迁移 ${copied} 项到 ${target}`);
+    break;
   }
 }
-let saveTimer = null;
+
+(function setupDataDir() {
+  // 自动化测试可以用环境变量把数据目录挪走，避免污染真实配置
+  const override = process.env.BILI_LISTEN_DATA_DIR;
+  const dir = override || path.join(app.getPath('appData'), DATA_DIR_NAME);
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+  } catch (e) {
+    console.error('[data] 创建数据目录失败', e);
+  }
+  if (!override) migrateDataDir(dir);
+  app.setPath('userData', dir);
+})();
+
+// ---------------- 配置持久化 ----------------
+const configStore = new ConfigStore(path.join(app.getPath('userData'), 'bili-listen-config.json'));
+let config = configStore.get();
+
+function loadConfig() {
+  config = configStore.load();
+  return config;
+}
 function saveConfig(patch = {}) {
-  config = { ...config, ...patch };
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    try {
-      fs.mkdirSync(path.dirname(configPath()), { recursive: true });
-      fs.writeFileSync(configPath(), JSON.stringify(config, null, 2), 'utf8');
-    } catch (e) {
-      console.error('[config] save failed', e);
-    }
-  }, 200);
+  config = configStore.set(patch);
+  return config;
+}
+/** 立刻同步落盘（退出前、会话保存时） */
+function flushConfig() {
+  configStore.flush();
 }
 
 // ---------------- 音频代理 ----------------
@@ -231,6 +296,7 @@ function registerIpc() {
       const cid = p.cid || 0;
       const key = `${p.bvid}_${cid || 'default'}`;
       resolveCache.set(key, { bvid: p.bvid, cid: p.cid });
+      await proxyReady;
       const localUrl = await proxy.register(key, {
         url: r.url,
         backupUrls: r.backupUrls,
@@ -293,7 +359,7 @@ function registerIpc() {
     'api:qrLoginCreate',
     wrap(async () => {
       const qr = await tvLogin.createQrCode();
-      const dataUrl = await QRCode.toDataURL(qr.url, {
+      const dataUrl = await QRCode().toDataURL(qr.url, {
         width: 280,
         margin: 1,
         errorCorrectionLevel: 'M',
@@ -428,14 +494,28 @@ function registerIpc() {
   ipcMain.handle('api:history', wrap((p) => bili.getHistory({ ...p, cookie: config.cookie })));
 
   // 配置
-  ipcMain.handle('store:getAll', () => ({ ...config }));
+  ipcMain.handle('store:getAll', () => ({ ...config, dataDir: app.getPath('userData') }));
   ipcMain.handle(
     'store:set',
     wrap(async (patch) => {
       saveConfig(patch);
+      // 会话类改动（队列/断点）要求「关掉再开还在」，不等防抖
+      if (patch && (patch.session || patch.cookie || patch.user)) flushConfig();
       return config;
     }),
   );
+  // 窗口关闭前同步落盘：invoke 是异步的，beforeunload 里等不到回包
+  ipcMain.on('store:setSync', (e, patch) => {
+    try {
+      saveConfig(patch || {});
+      flushConfig();
+      e.returnValue = { ok: true };
+    } catch (err) {
+      e.returnValue = { ok: false, error: err.message };
+    }
+  });
+  ipcMain.handle('store:dataDir', () => configStore.stat());
+  ipcMain.handle('store:openDataDir', () => shell.openPath(app.getPath('userData')));
 
   // 窗口控制
   ipcMain.handle('window:minimize', () => win && win.minimize());
@@ -465,12 +545,12 @@ function registerIpc() {
     'api:img',
     wrap(async ({ url }) => {
       if (!url) return { url: '' };
-      return { url: `http://127.0.0.1:${proxy.port}/img?u=${encodeURIComponent(url)}` };
+      return { url: `http://127.0.0.1:${proxyPort()}/img?u=${encodeURIComponent(url)}` };
     }),
   );
 
   // 前端启动时拿代理基址（图片 URL 需要同步拼）
-  ipcMain.handle('app:proxyBase', () => `http://127.0.0.1:${proxy.port}`);
+  ipcMain.handle('app:proxyBase', () => `http://127.0.0.1:${proxyPort()}`);
 
   // 托盘同步
   ipcMain.on('player:state', (_e, state) => {
@@ -501,6 +581,9 @@ function registerMediaKeys() {
 }
 
 // ---------------- 生命周期 ----------------
+// 任务栏分组 / 通知归属都靠这个 ID，不设的话打包版会显示成 electron.app.Electron
+if (process.platform === 'win32') app.setAppUserModelId('com.bililisten.desktop');
+
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
@@ -513,17 +596,15 @@ if (!gotLock) {
     }
   });
 
-  app.whenReady().then(async () => {
+  app.whenReady().then(() => {
     loadConfig();
-    proxy = new AudioProxy();
-    proxy.setResolver(resolveAudio);
-    await proxy.start(PROXY_PORT);
-    console.log('[proxy] listening on', proxy.port);
-
     registerIpc();
+    // 先把窗口画出来，再去起代理 / 托盘：代理 init 有磁盘和 socket 开销，
+    // 放在 createWindow 之前会白等 100~300ms 才见窗口。
     createWindow();
     createTray();
     registerMediaKeys();
+    startProxy();
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -540,10 +621,13 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   quitting = true;
+  // 防抖中的改动不能丢：退出前同步落盘
+  flushConfig();
 });
 
 app.on('will-quit', async () => {
   globalShortcut.unregisterAll();
+  flushConfig();
   try {
     await proxy?.stop();
   } catch {}

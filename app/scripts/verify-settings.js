@@ -60,6 +60,9 @@ const httpGet = (url) => new Promise((res, rej) => {
     else { fail++; console.log(`FAIL  ${name}${detail ? '  — ' + detail : ''}`); }
   };
 
+  // 现在会记住「上次停在哪一页」，验收前先回发现页，保证起点一致
+  await ev(`(async()=>{const b=document.querySelector('.sidebar-item[data-key="discover"]');if(b){b.click();await new Promise(r=>setTimeout(r,1500));}return true;})()`);
+
   // 1. 发现页骨架清理
   const d = await ev(`({skel:document.querySelectorAll('.skeleton-card').length,cards:document.querySelectorAll('.video-card').length,
     loaded:[...document.querySelectorAll('.card-cover img')].filter(i=>i.naturalWidth>0).length})`);

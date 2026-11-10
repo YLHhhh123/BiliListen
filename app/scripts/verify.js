@@ -124,6 +124,9 @@ function check(name, pass, detail = '') {
   await cdp.send('Log.enable');
   await sleep(1500);
 
+  // 现在会记住「上次停在哪一页」，验收前先回发现页，保证起点一致
+  await cdp.eval(`(async()=>{const b=document.querySelector('.sidebar-item[data-key="discover"]');if(b){b.click();await new Promise(r=>setTimeout(r,1500));}return true;})()`);
+
   try {
     // 1. 无白屏
     const bodyLen = await cdp.eval('document.body.innerHTML.length');

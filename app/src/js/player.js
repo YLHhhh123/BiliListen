@@ -13,6 +13,7 @@ let lastVolume = 0.8;
 let retryCount = 0;
 let currentKey = '';       // 当前播放 bvid_cid
 let prefetchTimer = null;
+let pendingSeek = 0;       // 加载完成后要跳到的秒数（断点续播用）
 
 // 倍速档位：对齐手机版 B 站「听视频」PodcastSpeedSeekBar（6 档，默认 1.0）
 export const RATES = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
@@ -29,6 +30,14 @@ export async function initPlayer() {
 
   audio.addEventListener('loadedmetadata', () => {
     store.set({ duration: audio.duration || 0, buffering: false });
+    if (pendingSeek > 1 && audio.duration > 2) {
+      // 上次已经听到结尾了就别再停在结尾，从头来
+      const done = pendingSeek >= audio.duration - 3;
+      const to = done ? 0 : Math.min(pendingSeek, Math.max(0, audio.duration - 1));
+      audio.currentTime = to;
+      store.set({ currentTime: to, progress: to / audio.duration });
+    }
+    pendingSeek = 0;
   });
 
   audio.addEventListener('timeupdate', () => {
@@ -119,8 +128,9 @@ async function prefetchNext() {
 // ---------- 播放控制 ----------
 
 /** 播放一个视频项（先拉 video 详情取 cid，再拉 playurl） */
-export async function playVideo(item) {
+export async function playVideo(item, opts = {}) {
   // item: {bvid, cid?, title, author, cover, duration}
+  // opts.startAt: 从第几秒开始（断点续播 / 历史记录点进来）
   if (!item.bvid) return;
   let cid = item.cid;
   if (!cid) {
@@ -137,6 +147,8 @@ export async function playVideo(item) {
   currentKey = key;
   retryCount = 0;
   prefetchTimer = null;
+  const seekStart = Math.max(0, Number(opts.startAt) || 0);
+  pendingSeek = seekStart;
 
   // 找它在队列中的位置
   let idx = store.get().queue.findIndex((q) => q.bvid === item.bvid && q.cid === cid);
@@ -183,7 +195,7 @@ export async function playVideo(item) {
     bvid: item.bvid, cid,
     title: item.title, author: item.author,
     cover: item.cover, duration: item.duration,
-    lastPos: 0,
+    lastPos: Math.floor(seekStart),
   });
 }
 
@@ -203,19 +215,74 @@ export function playQueueIndex(idx) {
   playVideo(queue[idx]);
 }
 
+/**
+ * 还原上次退出时的播放现场（不自动出声）。
+ * 只把队列 / 当前曲目 / 秒数摆回界面；音频地址要等用户点播放时再取，
+ * 因为 B 站的 playurl 带签名和有效期，存下来第二天就失效了。
+ */
+export function restoreSession(session) {
+  if (!session || typeof session !== 'object') return null;
+  const queue = (Array.isArray(session.queue) ? session.queue : []).filter((q) => q && q.bvid);
+  const playing = session.playing && session.playing.bvid ? session.playing : null;
+  if (!playing && queue.length === 0) return null;
+  const currentIndex = Number.isInteger(session.currentIndex) ? session.currentIndex : -1;
+  const pos = Math.max(0, Number(session.position) || 0);
+  const dur = Number(playing?.duration) || 0;
+  if (playing) {
+    currentKey = `${playing.bvid}_${playing.cid || 0}`;
+    pendingSeek = pos;
+  }
+  store.set({
+    queue,
+    currentIndex,
+    playing,
+    currentTime: pos,
+    duration: dur,
+    progress: dur > 0 ? Math.min(1, pos / dur) : 0,
+    isPlaying: false,
+    buffering: false,
+  });
+  return { playing, queue, position: pos };
+}
+
 export function togglePlay() {
-  if (!store.get().playing) return;
+  const s = store.get();
+  if (!s.playing) return;
+  // 还原现场后 audio.src 还是空的：这时点播放要重新取地址，并从断点开始
+  if (!audio.src) {
+    playVideo(s.playing, { startAt: s.currentTime || 0 });
+    return;
+  }
   if (audio.paused) audio.play().catch(() => {});
   else audio.pause();
 }
 
 export function seek(ratio) {
+  const s = store.get();
+  // 还没取到音频地址（刚还原现场）：只挪界面上的进度，点播放时按这个位置开始
+  if (!audio.src) {
+    const dur = s.duration || s.playing?.duration || 0;
+    if (!dur) return;
+    const t = Math.max(0, Math.min(dur, ratio * dur));
+    pendingSeek = t;
+    store.set({ currentTime: t, progress: dur > 0 ? t / dur : 0 });
+    return;
+  }
   const dur = audio.duration;
   if (!dur) return;
   audio.currentTime = Math.max(0, Math.min(dur, ratio * dur));
 }
 
 export function seekBy(delta) {
+  if (!audio.src) {
+    const s = store.get();
+    const dur = s.duration || s.playing?.duration || 0;
+    if (!dur) return;
+    const t = Math.max(0, Math.min(dur, (s.currentTime || 0) + delta));
+    pendingSeek = t;
+    store.set({ currentTime: t, progress: t / dur });
+    return;
+  }
   audio.currentTime = Math.max(0, Math.min(audio.duration || 0, audio.currentTime + delta));
 }
 
