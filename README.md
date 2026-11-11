@@ -62,11 +62,11 @@ npm start          # 或双击 start.bat
 cd app
 node scripts\build.js
 # 产物：
-#   dist\BiliListen-Setup-1.0.0.exe     安装包（65.6 MB）
+#   dist\BiliListen-Setup-1.1.0.exe     安装包（65.6 MB）
 #   dist\BiliListen-win32-x64\          免安装目录版（整个文件夹拷走也能跑）
 ```
 
-双击 `BiliListen-Setup-1.0.0.exe`，跟市面上的桌面软件一样：
+双击 `BiliListen-Setup-1.1.0.exe`，跟市面上的桌面软件一样：
 
 1. 选安装位置（默认 `%LOCALAPPDATA%\Programs\BiliListen`，**当前用户安装，不要管理员权限**，不弹 UAC）
 2. 装完自动在**桌面**和**开始菜单**创建 `BiliListen` 快捷方式，并直接启动
@@ -81,6 +81,7 @@ node scripts\build.js            # 检测到 certs\codesign.pfx 就自动签名
 ```
 
 - 证书和密码落在 `certs\`（已在 `.gitignore`，绝不进仓库）。生成一次长期复用；以后换商业证书只替换 PFX 文件，构建脚本不用动。
+- **签名由 electron-builder 在构建过程中完成**（构建脚本通过 `WIN_CSC_LINK`/`WIN_CSC_KEY_PASSWORD` 环境变量把 PFX 交给它，密码不落盘到 package.json）：应用 exe → `elevate.exe` → NSIS 卸载器 → 最终安装器，全部按正确顺序签名，并在签名后生成 blockmap。构建结束后脚本会用 PowerShell `Get-AuthenticodeSignature` 校验签名者指纹，验不过直接构建失败。
 - 签名带 **DigiCert RFC3161 时间戳**：证书将来过期，已签好的安装包依然验证有效。
 - 边界要说清楚：自签名给安装包挂上真实的签名者信息（不再「unsigned」），导入过证书的机器完全信任；但**陌生机器上的 SmartScreen「未知发布者」提示消除不了**——那靠 CA 信誉链，公开分发想全绿只能买商业证书（OV 约 1000–3000 元/年）。
 
@@ -136,6 +137,7 @@ PASS 10. 队列抽屉打开
 | `node scripts\verify-persistence.js` | **关掉再开还在不在**：队列/当前曲目/断点秒数/上次页面，强杀后 JSON 不坏、不自动出声、点播放续播 | **18/18** |
 | `node scripts\verify-login.js` | 扫码二维码生成 / 轮询 / 浏览器登录 IPC / Cookie 校验 / 三 Tab 弹层 | **8/8** |
 | `node scripts\verify-cookie-import.js` | 粘贴 Cookie 的解析（裸值/整行/脏输入/头注入）+ 落盘补全 + 假凭据必须被拒 | **15/15**（设 `BILI_TEST_COOKIE` 时 16/16） |
+| `node scripts\verify-features.js` | **v1.1.0 新功能专项**：倍速下拉 6 档 / 定时关闭双开关（播完当前 + N 分钟可同时启用）/ 侧边栏自动目录（热门/榜单/收藏一键灌队列）/ 卡片菜单「以此生成播放目录」 | **10/10** |
 
 > **测试全程静音 + 不弹窗**：`verify.js` 启动参数带 `--mute-audio --hidden`，主进程 `isHidden` 分支不调用 `win.show()`，任务栏都看不到窗口。
 >
@@ -161,12 +163,12 @@ node scripts\make-cert.js        # 一次性：生成自签名代码签名证书
 
 | 次数 | 耗时 |
 |---|---|
-| 1（首次，磁盘冷） | 743 ms |
-| 2 | 570 ms |
-| 3 | 530 ms |
-| 平均 | **约 614 ms** |
+| 1（首次，磁盘冷） | 435 ms |
+| 2 | 291 ms |
+| 3 | 282 ms |
+| 平均 | **约 336 ms** |
 
-为这个数字做的三件事：
+为这个数字做的三件事（v1.1.0 静默安装实测，3 次平均 336 ms）：
 
 1. **窗口先出、代理后起** —— 原先 `await proxy.start()` 挡在 `createWindow()` 前面，白白多等一轮端口监听；现在先画窗口，音频代理在后台起。
 2. **qrcode 懒加载** —— 二维码库（带 pngjs）只在真点「扫码登录」时才 require，启动阶段不解析。
