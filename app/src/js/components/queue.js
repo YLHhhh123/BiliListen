@@ -4,6 +4,7 @@ import { el, svg, fmtDuration } from '../utils.js';
 import { bili } from '../api.js';
 import { store } from '../store.js';
 import { playQueueIndex, removeFromQueue, clearQueue, reorderQueue } from '../player.js';
+import { openPlaylistGenModal } from '../playlist.js';
 
 const ICONS = {
   close: 'M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z',
@@ -23,6 +24,8 @@ export function mountQueue() {
   const header = el('div', { class: 'queue-header' }, [
     el('h3', {}, '播放队列'),
     el('div', { class: 'queue-actions' }, [
+      // 空队列的快捷入口：不想去翻页面时直接在这里生成一批
+      el('span', { class: 'link', title: '自动生成一批可听内容', onclick: openPlaylistGenModal }, '自动目录'),
       el('span', { class: 'link', onclick: () => { clearQueue(); toastClear(); } }, '清空'),
       el('span', { class: 'link', title: '关闭', onclick: () => store.set({ queueOpen: false }) },
         [svg(ICONS.close, { size: 14 })]),
@@ -57,7 +60,7 @@ function render(s) {
     els.list.appendChild(el('div', { class: 'empty-state', style: { padding: '60px 20px' } }, [
       el('div', { style: { fontSize: 48, color: 'var(--bg-4)', textAlign: 'center', marginBottom: 16 } }, '♪'),
       el('div', { class: 'title' }, '队列为空'),
-      el('div', { class: 'desc' }, '从视频卡片拖到播放条即可加入'),
+      el('div', { class: 'desc' }, '点右上「自动目录」一键生成，或从视频卡片拖到播放条加入'),
     ]));
     return;
   }

@@ -6,8 +6,8 @@ import { el, svg } from './utils.js';
 import { bili } from './api.js';
 import { store, playHistory } from './store.js';
 import {
-  initPlayer, togglePlay, seekBy, setVolume, toggleMute,
-  nextTrack, prevTrack, addToQueue, playVideo, getAudio, restoreSession,
+  initPlayer, togglePlay, seekBy, setVolume, setRate, toggleMute,
+  nextTrack, prevTrack, addToQueue, playVideo, getAudio, restoreSession, RATES,
 } from './player.js';
 import { register, navigate, onNavigate } from './router.js';
 import { initSessionPersistence } from './session.js';
@@ -296,17 +296,15 @@ function mountSettings(container) {
     toast.success('默认音质已更新');
   });
 
-  // 默认倍速：滑杆 0.75–2×，实时写 store 顶层 rate（playbar 认这个字段）
-  const rateVal = el('span', { style: { color: 'var(--text-2, #ccc)', minWidth: '48px', textAlign: 'right' } },
-    (store.get().rate ?? 1) + '×');
-  const rateRange = el('input', { type: 'range', min: '0.75', max: '2', step: '0.25' });
-  rateRange.value = String(store.get().rate ?? 1);
-  rateRange.addEventListener('input', () => {
-    const rate = Number(rateRange.value);
-    rateVal.textContent = rate + '×';
-    bili.setConfig({ rate }).catch(() => {});
-    store.set({ rate });
-  });
+  // 默认倍速与播放条共用同一组离散档位，避免滑杆选出播放器未声明的值。
+  const rateSelect = el('select', {
+    class: 'btn',
+    style: { width: '120px' },
+    title: '默认播放倍速',
+  }, RATES.map((rate) => el('option', { value: rate }, `${rate}×`)));
+  rateSelect.value = String(store.get().rate ?? 1);
+  if (rateSelect.selectedIndex < 0) rateSelect.value = '1';
+  rateSelect.addEventListener('change', () => setRate(Number(rateSelect.value)));
 
   // 关窗口最小化到托盘：开关，持久化 config.minimizeToTray
   const trayChk = el('input', { type: 'checkbox' });
@@ -341,14 +339,7 @@ function mountSettings(container) {
       row('数据目录', '配置、登录态、播放进度（卸载不删除，重装自动恢复）',
         el('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } }, [dataInfo, openDirBtn])),
       row('默认音质', '新歌单与首次播放使用的音质档位', qualitySel),
-      el('div', { class: 'setting-row', style: { gap: '12px' } }, [
-        el('div', {}, [
-          el('div', { class: 'setting-label' }, '默认倍速'),
-          el('div', { class: 'setting-desc' }, '全局播放速度，范围 0.75–2×'),
-        ]),
-        rateRange,
-        rateVal,
-      ]),
+      row('默认倍速', '全局播放速度，提供 0.5×、0.75×、1×、1.25×、1.5×、2× 六档', rateSelect),
       row('最小化到托盘', '关闭窗口时不退出，最小化到系统托盘', trayLabel),
     ]),
   );

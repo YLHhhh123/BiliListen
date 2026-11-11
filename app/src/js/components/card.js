@@ -4,6 +4,7 @@ import { el, svg, fmtDuration, fmtPlay, fmtTime } from '../utils.js';
 import { bili } from '../api.js';
 import { toast } from './toast.js';
 import { playVideo, addToQueue } from '../player.js';
+import { generatePlaylist } from '../playlist.js';
 
 const ICONS = {
   play: 'M8 5v14l11-7z',
@@ -132,6 +133,8 @@ function openCardMenu(e, item) {
   const items = [
     { label: '加入队列', action: () => addToQueue(item) },
     { label: '稍后播放', action: () => addToQueue(item) },
+    // 以这个视频为种子拉相关推荐，自动组成一条连续的播放目录
+    { label: '以此生成播放目录', action: () => generatePlaylist('related', { seedBvid: item.bvid }) },
     { label: '在浏览器打开', action: () => bili.openExternal(`https://www.bilibili.com/video/${item.bvid}`) },
   ];
   items.forEach((it) => {

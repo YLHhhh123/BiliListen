@@ -373,3 +373,80 @@
 }
 .np-secondary { position: relative; }
 
+/* ==========================================================
+ * 播放条倍速下拉：徽标 + 透明 select 覆盖
+ * select 完全透明铺在徽标上，点击命中 select 弹出原生下拉；
+ * 文字仍由徽标渲染（select 文字透明、字体与徽标一致，不闪烁）。
+ * ========================================================== */
+.rate-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.rate-wrap .rate-select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  font-size: 12px; /* 与徽标一致，原生下拉弹出时不突兀 */
+}
+/* select 弹出的原生面板在 Chromium 里继承 zoom，不可样式化，保持默认即可 */
+
+/* ---------- 自动播放目录生成 ---------- */
+.playlist-count-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 0 12px;
+  color: var(--text-2);
+  font-size: 12px;
+}
+.playlist-count-select { width: 112px; }
+.playlist-gen-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.playlist-gen-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  background: var(--bg-3);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: border-color .16s var(--ease), background .16s var(--ease);
+  text-align: left;
+  color: var(--text-1);
+}
+.playlist-gen-card:hover { border-color: var(--brand); background: var(--bg-4); }
+.playlist-gen-card .t { font-size: 13px; font-weight: 600; }
+.playlist-gen-card .d { font-size: 11.5px; color: var(--text-3); line-height: 1.5; }
+.playlist-gen-hint {
+  font-size: 12px;
+  color: var(--text-3);
+  line-height: 1.7;
+  margin: 0 0 12px;
+}
+.playlist-gen-loading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 18px 0;
+  color: var(--text-2);
+  font-size: 13px;
+}
+.spin {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid var(--line-strong, rgba(255,255,255,.2));
+  border-top-color: var(--brand);
+  animation: bl-spin .8s linear infinite;
+}
+@keyframes bl-spin { to { transform: rotate(360deg); } }
+

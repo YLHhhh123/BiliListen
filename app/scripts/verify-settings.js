@@ -76,31 +76,32 @@ const httpGet = (url) => new Promise((res, rej) => {
   const s = await ev(`(()=>{
     const rows=[...document.querySelectorAll('.setting-row')];
     const labels=rows.map(r=>(r.querySelector('.setting-label')||{}).textContent||'').filter(Boolean);
-    const sel=document.querySelector('select');
-    const rng=document.querySelector('input[type=range]');
+    const selects=[...document.querySelectorAll('.setting-row select')];
+    const quality=selects.find(x=>[...x.options].some(o=>o.value==='30280'));
+    const rate=selects.find(x=>[...x.options].some(o=>o.value==='0.5'));
     const chk=document.querySelector('input[type=checkbox]');
-    return {labels,hasSelect:!!sel,selValue:sel?sel.value:null,selOptions:sel?sel.options.length:0,
-      hasRange:!!rng,rngValue:rng?rng.value:null,rngMin:rng?rng.min:null,rngMax:rng?rng.max:null,
-      hasCheckbox:!!chk,chkChecked:chk?chk.checked:null,
-      inlineOptions: sel?[...sel.options].map(o=>o.value+':'+o.textContent):[]};
+    return {labels,qualityOptions:quality?[...quality.options].map(o=>o.value):[],rateOptions:rate?[...rate.options].map(o=>Number(o.value)):[],
+      qualityValue:quality?.value,rateValue:rate?.value,hasCheckbox:!!chk,chkChecked:chk?chk.checked:null};
   })()`);
-  check('设置页有音质下拉', s.hasSelect && s.selOptions === 5, `options=${s.selOptions} value=${s.selValue} ${JSON.stringify(s.inlineOptions)}`);
-  check('设置页有倍速滑杆', s.hasRange && s.rngMin === '0.75' && s.rngMax === '2', `value=${s.rngValue} range=${s.rngMin}-${s.rngMax}`);
+  check('设置页有音质下拉', s.qualityOptions.length === 5, `options=${JSON.stringify(s.qualityOptions)} value=${s.qualityValue}`);
+  check('设置页有 6 档倍速下拉',
+    s.rateOptions.length === 6 && [0.5,0.75,1,1.25,1.5,2].every(v=>s.rateOptions.includes(v)),
+    `value=${s.rateValue} options=${JSON.stringify(s.rateOptions)}`);
   check('设置页有托盘开关', s.hasCheckbox === true, `checked=${s.chkChecked}`);
   check('设置页行标签完整', s.labels.length >= 7, s.labels.join(' / '));
 
   // 3. 改音质 → 落盘
-  await ev(`(()=>{const sel=document.querySelector('select');sel.value='30251';sel.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+  await ev(`(()=>{const sel=[...document.querySelectorAll('.setting-row select')].find(x=>[...x.options].some(o=>o.value==='30280'));sel.value='30251';sel.dispatchEvent(new Event('change',{bubbles:true}));})()`);
   await sleep(700);
   const q = await ev(`window.bili.getAllConfig()`);
   check('音质改动已持久化', q && String(q.quality) === '30251', `quality=${q && q.quality}`);
 
   // 4. 改倍速 → 落盘 + playbar 同步
-  await ev(`(()=>{const r=document.querySelector('input[type=range]');r.value='1.75';r.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+  await ev(`(()=>{const r=[...document.querySelectorAll('.setting-row select')].find(x=>[...x.options].some(o=>o.value==='0.5'));r.value='1.5';r.dispatchEvent(new Event('change',{bubbles:true}));})()`);
   await sleep(700);
   const r2 = await ev(`({cfg:null, badge:(document.getElementById('pb-rate')||{}).textContent||''})`);
   const c2 = await ev(`window.bili.getAllConfig()`);
-  check('倍速改动已持久化', c2 && String(c2.rate) === '1.75', `rate=${c2 && c2.rate} playbar=${r2.badge}`);
+  check('倍速改动已持久化', c2 && String(c2.rate) === '1.5' && r2.badge === '1.5x', `rate=${c2 && c2.rate} playbar=${r2.badge}`);
 
   // 5. 托盘开关 → 落盘
   await ev(`(()=>{const c=document.querySelector('input[type=checkbox]');c.checked=false;c.dispatchEvent(new Event('change',{bubbles:true}));})()`);

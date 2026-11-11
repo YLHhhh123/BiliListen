@@ -15,3 +15,7 @@ app/node_modules/
 # 本地配置（Cookie 等敏感信息）
 config.json
 bili-listen-config.json
+
+# 代码签名证书（私钥，绝不能进仓库）
+certs/
+*.pfx

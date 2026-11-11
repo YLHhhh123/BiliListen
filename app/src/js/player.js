@@ -18,8 +18,8 @@ let pendingSeek = 0;       // 加载完成后要跳到的秒数（断点续播�
 // 倍速档位：对齐手机版 B 站「听视频」PodcastSpeedSeekBar（6 档，默认 1.0）
 export const RATES = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
 
-// 「播完当前曲目后暂停」标志（模块内，不进 store）
-let pauseAfterCurrent = false;
+// 「播完当前曲目后暂停」放进 store，播放器与 UI 只认这一份状态；
+// 仍然是内存态，session.js 不会把它落盘，重启自然清空。
 
 // ---------- 加载配置 ----------
 export async function initPlayer() {
@@ -150,11 +150,12 @@ export async function playVideo(item, opts = {}) {
   const seekStart = Math.max(0, Number(opts.startAt) || 0);
   pendingSeek = seekStart;
 
-  // 找它在队列中的位置
-  let idx = store.get().queue.findIndex((q) => q.bvid === item.bvid && q.cid === cid);
+  // 找它在队列中的位置。自动目录里的 cid 会先留空，解析到真实 cid 后要
+  // 回写原队列项；否则严格按 cid 匹配会把同一个视频再插一遍，造成首项重复。
+  const queue = store.get().queue.slice();
+  let idx = queue.findIndex((q) => q.bvid === item.bvid && (!q.cid || q.cid === cid));
   if (idx < 0) {
     // 不在队列里，插到当前位置之后
-    const queue = store.get().queue.slice();
     const cur = store.get().currentIndex;
     const insertPos = cur >= 0 ? cur + 1 : queue.length;
     queue.splice(insertPos, 0, {
@@ -162,10 +163,19 @@ export async function playVideo(item, opts = {}) {
       title: item.title, author: item.author, cover: item.cover, duration: item.duration,
     });
     idx = insertPos;
-    store.set({ queue, currentIndex: idx });
   } else {
-    store.set({ currentIndex: idx });
+    const old = queue[idx];
+    queue[idx] = {
+      ...old,
+      key,
+      cid,
+      title: item.title || old.title,
+      author: item.author || old.author,
+      cover: item.cover || old.cover,
+      duration: item.duration || old.duration,
+    };
   }
+  store.set({ queue, currentIndex: idx });
 
   store.set({
     playing: { ...item, cid, key },
@@ -312,12 +322,12 @@ export function nextRate() {
 
 /** 设置「播完当前曲目后暂停」：ended 时不自动播下一首 */
 export function pauseAfterCurrentTrack() {
-  pauseAfterCurrent = true;
+  store.set({ pauseAfterCurrent: true });
 }
 
 /** 取消「播完当前暂停」标志（关闭定时用） */
 export function cancelPauseAfterCurrent() {
-  pauseAfterCurrent = false;
+  store.set({ pauseAfterCurrent: false });
 }
 
 const PLAY_MODES = ['order', 'loop', 'single', 'shuffle'];
@@ -357,9 +367,11 @@ function getPrevItem() {
 }
 
 function handleEnded() {
-  // 定时关闭的「播完当前」：播完本曲就停，不进下一首
-  if (pauseAfterCurrent) {
-    pauseAfterCurrent = false;
+  // 定时关闭的「播完当前」：播完本曲就停，不进下一首。
+  // 该分支触发时顺带清掉数字定时（若也在倒计时）——二者语义是「同一次定时关闭」，
+  // 留着会让下一次手动播放被残留的倒计时打断。
+  if (store.get().pauseAfterCurrent) {
+    stopSleepTimer(false);
     audio.pause();
     store.set({ isPlaying: false });
     toast.info('本曲已播完，已按定时设置暂停');
@@ -442,26 +454,35 @@ async function persistConfig(patch) {
   try { await bili.setConfig(patch); } catch {}
 }
 
-// 定时关闭
+// 定时关闭（双模式）
+//   endOfTrack：播完当前曲目暂停（不倒计时）
+//   timer     ：N 分钟后暂停（倒计时）
+// 两个开关互相独立、可同时启用；任意一个触发后，另一个也一并清掉。
+// prevCountsPrev 留 true：重开定时不清旧标志；手动「关闭定时」传 false，一次清干净。
 let sleepInterval = null;
 export function startSleepTimer(minutes) {
-  stopSleepTimer();
-  if (minutes <= 0) return;
+  stopSleepTimer(true);
+  if (!(minutes > 0)) return;
   const target = Date.now() + minutes * 60 * 1000;
   store.set({ sleepTimer: target, sleepRemaining: minutes * 60 });
   sleepInterval = setInterval(() => {
     const remain = Math.max(0, Math.floor((target - Date.now()) / 1000));
     store.set({ sleepRemaining: remain });
     if (remain <= 0) {
-      stopSleepTimer();
+      // 数字定时到点：停表 + 清「播完当前」标志，然后淡出暂停
+      stopSleepTimer(false);
+      cancelPauseAfterCurrent();
       fadeOutAndPause();
     }
   }, 1000);
 }
 
-export function stopSleepTimer() {
+export function stopSleepTimer(keepEndOfTrack = true) {
   if (sleepInterval) { clearInterval(sleepInterval); sleepInterval = null; }
   store.set({ sleepTimer: 0, sleepRemaining: 0 });
+  // 手动关闭（keepEndOfTrack=false）时连「播完当前暂停」一起取消；
+  // 重开数字定时（true）时不碰它 —— 允许「播完当前 + N 分钟」并存。
+  if (!keepEndOfTrack) cancelPauseAfterCurrent();
 }
 
 function fadeOutAndPause() {

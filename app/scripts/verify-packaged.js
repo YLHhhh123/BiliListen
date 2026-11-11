@@ -125,9 +125,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     document.querySelector('.sidebar-item[data-key="settings"]').click();
     await new Promise(r=>setTimeout(r,800));
     const rows=[...document.querySelectorAll('.setting-row')].map(r=>(r.querySelector('.setting-label')||{}).textContent);
-    return {rows,sel:document.querySelectorAll('select').length,rng:document.querySelectorAll('input[type=range]').length,chk:document.querySelectorAll('input[type=checkbox]').length};
+    const selects=[...document.querySelectorAll('.setting-row select')];
+    return {rows,sel:selects.length,rateOpts:selects.find(x=>[...x.options].some(o=>o.value==='0.5'))?.options.length||0,
+      rng:document.querySelectorAll('input[type=range]').length,chk:document.querySelectorAll('input[type=checkbox]').length};
   })()`);
-  check('设置页完整', s && s.sel === 1 && s.rng === 1 && s.chk === 1 && s.rows.length >= 7, s.rows.join('/'));
+  check('设置页完整', s && s.sel === 2 && s.rateOpts === 6 && s.rng === 0 && s.chk === 1 && s.rows.length >= 7, s.rows.join('/'));
 
   // 7 无错误
   check('无控制台错误', errs.length === 0, errs.slice(0, 3).join(' | ') || 'clean');

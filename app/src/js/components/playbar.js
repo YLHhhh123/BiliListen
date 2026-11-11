@@ -3,7 +3,7 @@
 import { el, svg, fmtDuration } from '../utils.js';
 import { store } from '../store.js';
 import { bili } from '../api.js';
-import { togglePlay, seek, setVolume, toggleMute, nextRate, cycleMode, prevTrack, nextTrack, startSleepTimer, stopSleepTimer, pauseAfterCurrentTrack, cancelPauseAfterCurrent } from '../player.js';
+import { togglePlay, seek, setVolume, setRate, toggleMute, cycleMode, prevTrack, nextTrack, startSleepTimer, stopSleepTimer, pauseAfterCurrentTrack, cancelPauseAfterCurrent, RATES } from '../player.js';
 import { openModal, closeModal } from './modal.js';
 import { toast } from './toast.js';
 
@@ -77,11 +77,23 @@ export function mountPlaybar() {
   const center = el('div', { class: 'playbar-center' }, [controls, progressRow]);
 
   // 右侧：倍速 / 定时 / 音量
+  // 倍速列表选择：把原生 select 透明铺在徽标上，点徽标即弹原生下拉（Chromium 下
+  // select.click() 程序化展开不可靠，覆盖式是稳的）。选完走 setRate 持久化。
   const rateBadge = el('div', {
     class: 'rate-badge', id: 'pb-rate',
-    onclick: nextRate,
-    title: '倍速（点击切换）',
+    title: '倍速（点击选择）',
   }, '1.0x');
+  const rateSelect = el('select', {
+    class: 'rate-select', id: 'pb-rate-select',
+    title: '播放倍速',
+    onchange: () => {
+      const r = Number(rateSelect.value);
+      if (RATES.includes(r)) setRate(r);
+    },
+  }, RATES.map((r) => el('option', { value: r }, r + 'x')));
+  rateSelect.value = String(store.get().rate ?? 1);
+  if (rateSelect.selectedIndex < 0) rateSelect.value = '1';
+  const rateWrap = el('div', { class: 'rate-wrap', title: '倍速（点击选择）' }, [rateBadge, rateSelect]);
   const sleepBadge = el('div', {
     class: 'sleep-badge', id: 'pb-sleep',
     onclick: openSleepModal,
@@ -98,7 +110,7 @@ export function mountPlaybar() {
   }, [svg(ICONS.expand, { size: 16 })]);
 
   const right = el('div', { class: 'playbar-right' },
-    [rateBadge, sleepBadge, volBtn, volSlider, expandBtn]);
+    [rateWrap, sleepBadge, volBtn, volSlider, expandBtn]);
 
   root.append(cover, info, center, right);
 
@@ -193,12 +205,23 @@ function renderPlaybar(s) {
     modeBtn.title = MODE_LABEL[s.playMode] || '顺序';
     modeBtn.appendChild(svg(MODE_ICON[s.playMode] || MODE_ICON.order, { size: 18 }));
   }
-  if (rateBadge) rateBadge.textContent = s.rate + 'x';
+  if (rateBadge) {
+    rateBadge.textContent = s.rate + 'x';
+    // store.rate 可能被设置页滑杆改过，同步回下拉；找不到对应档位时保持原样
+    const sel = document.getElementById('pb-rate-select');
+    if (sel && RATES.includes(s.rate)) sel.value = String(s.rate);
+  }
   if (sleepBadge) {
-    if (s.sleepRemaining > 0) {
+    const hasTimer = s.sleepRemaining > 0;
+    const hasEndOfTrack = !!s.pauseAfterCurrent;
+    if (hasTimer) {
       const m = Math.floor(s.sleepRemaining / 60);
       const sec = s.sleepRemaining % 60;
-      sleepBadge.textContent = `⏰ ${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+      const base = `⏰ ${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+      sleepBadge.textContent = hasEndOfTrack ? base + ' ·播完' : base;
+      sleepBadge.classList.add('active');
+    } else if (hasEndOfTrack) {
+      sleepBadge.textContent = '⏰ 播完暂停';
       sleepBadge.classList.add('active');
     } else {
       sleepBadge.textContent = '⏰';
@@ -216,31 +239,67 @@ function renderPlaybar(s) {
 }
 
 function openSleepModal() {
-  const opts = [
-    { label: '15 分钟', mins: 15 },
-    { label: '30 分钟', mins: 30 },
-    { label: '45 分钟', mins: 45 },
-    { label: '60 分钟', mins: 60 },
-    { label: '90 分钟', mins: 90 },
-    { label: '播完当前曲目', mins: -1 },
-    { label: '关闭定时', mins: 0 },
-  ];
-  const body = el('div', { style: { display: 'grid', gap: 8 } });
-  opts.forEach((o) => {
-    body.appendChild(el('div', {
-      class: 'btn',
-      style: { width: '100%', justifyContent: 'flex-start' },
-      onclick: () => {
-        if (o.mins === 0) {
-          stopSleepTimer();
-          cancelPauseAfterCurrent();
-        } else if (o.mins === -1) {
-          pauseAfterCurrentTrack();
-          toast.success('将在当前曲目播完后暂停');
-        } else startSleepTimer(o.mins);
-        closeModal();
-      },
-    }, o.label));
+  const s = store.get();
+  // 两个开关可同时勾选，先到者触发：
+  //   A. 播完当前曲目后暂停（无倒计时，等 ended 事件）
+  //   B. N 分钟后暂停（倒计时，淡出暂停）
+  // 任一触发后另一个自动清掉（见 player.js 的 handleEnded / sleepInterval）。
+  const chkEot = el('input', { type: 'checkbox' });
+  chkEot.checked = !!s.pauseAfterCurrent;
+  const chkTimer = el('input', { type: 'checkbox' });
+  chkTimer.checked = (s.sleepRemaining || 0) > 0;
+
+  const minsSel = el('select', { class: 'btn', style: { width: '110px' } },
+    [15, 30, 45, 60, 90, 120].map((m) => el('option', { value: m }, m + ' 分钟')));
+  minsSel.value = '30';
+
+  const row = (ctrl, label, desc) => el('label', {
+    style: { display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer', padding: '4px 0' },
+  }, [
+    ctrl,
+    el('div', {}, [
+      el('div', {}, label),
+      el('div', { style: { fontSize: '12px', color: 'var(--text-3, #888)' } }, desc),
+    ]),
+  ]);
+
+  const timerRow = el('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } },
+    [chkTimer, el('div', {}, [
+      el('div', {}, '定时暂停'),
+      el('div', { style: { fontSize: '12px', color: 'var(--text-3, #888)', marginTop: 4 } }, minsSel),
+    ])]);
+  // 点「定时暂停」文字行也能勾选：让整行 label 拦截，勾选框单独渲染
+  timerRow.style.cursor = 'pointer';
+
+  const applyBtn = el('button', {
+    class: 'btn',
+    onclick: () => {
+      const eot = chkEot.checked;
+      const timed = chkTimer.checked;
+      // 全关：手动关闭，把两个标志都清掉
+      if (!eot && !timed) {
+        stopSleepTimer(false);
+        toast.info('已关闭定时');
+      } else {
+        // 重开数字定时（不清「播完当前」标志）；没勾数字定时就只清倒计时本身
+        stopSleepTimer(true);
+        if (eot) { pauseAfterCurrentTrack(); toast.success(eot && timed ? '将在播完当前曲目或定时到时暂停（先到为准）' : '将在当前曲目播完后暂停'); }
+        else cancelPauseAfterCurrent();
+        if (timed) startSleepTimer(Number(minsSel.value));
+      }
+      closeModal();
+    },
+  }, '确定');
+  const cancelBtn = el('button', { class: 'btn ghost', onclick: closeModal }, '取消');
+
+  openModal({
+    title: '定时关闭',
+    body: el('div', { style: { display: 'grid', gap: 10 } }, [
+      el('p', { style: { margin: 0, fontSize: '12px', color: 'var(--text-3, #888)' } },
+        '两个开关可同时启用，先到者生效；任意一个触发后另一个自动取消。'),
+      row(chkEot, '播完当前曲目后暂停', '听完当前这一首就停，不切下一首'),
+      timerRow,
+    ]),
+    footer: [cancelBtn, applyBtn],
   });
-  openModal({ title: '定时关闭', body });
 }

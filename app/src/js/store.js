@@ -98,5 +98,6 @@ export const store = createStore({
   theme: 'dark',
   sleepTimer: 0,           // 目标时间戳 ms，0=未开启
   sleepRemaining: 0,       // 剩余秒数
+  pauseAfterCurrent: false, // 播完当前曲目暂停；内存态，重启自动清空
   lyrics: [],              // 当前字幕 lines
 });

@@ -120,7 +120,7 @@ bili.reportPlayerState(state) // { playing:boolean, title:string }  用于托盘
 - 切歌流程：`bili.playurl({bvid, cid})` → 拿到 localUrl → `audio.src = localUrl` → `audio.play()`。
 - **不要**在切歌时复用旧 localUrl（key 是 `bvid_cid`，不同分P 不同 key）。
 - 音量 0–1 渐变，静音按钮记忆上次音量。
-- 倍速：`audio.playbackRate`，档位 `[0.75, 1.0, 1.25, 1.5, 1.75, 2.0]`。
+- 倍速：`audio.playbackRate`，播放条用**下拉列表选择**（原生 select 透明覆盖在徽标上，点徽标即弹原生下拉），档位 `[0.5, 0.75, 1.0, 1.25, 1.5, 2.0]`，选完持久化；设置页的「默认倍速」滑杆与它共用 `store.rate`。
 - 进度条：hover 显示时间气泡；点击/拖动 seek；拖动时暂停 timeupdate 回写避免抖动。
 - 缓冲中显示 loading 态（封面转圈或播放条上的小 spinner）。
 - 播放失败自动重试 1 次（重新调 playurl 拿新地址）。
@@ -145,10 +145,13 @@ bili.reportPlayerState(state) // { playing:boolean, title:string }  用于托盘
 - 右下角「返回」按钮 + ESC 键返回。
 - 若 `autoNext` 开启，播放到 90% 时预取下一首的 playurl（静默，不报错）。
 
-### 3.7 定时关闭
-- 弹层选项：15 / 30 / 45 / 60 / 90 分钟 / 播完当前曲目 / 关闭定时。
-- 倒计时显示在播放条右侧（`⏰ 23:45`）。
-- 到时：淡出音量 3 秒后暂停。
+### 3.7 定时关闭（双模式，可同时启用）
+- 弹层是**两个独立开关**，不是单选：
+  - 「播完当前曲目后暂停」：不倒计时，等 `ended` 事件；触发时不再切下一首。
+  - 「定时暂停」：下拉选 15 / 30 / 45 / 60 / 90 / 120 分钟，倒计时到点淡出暂停。
+- 两个开关**可同时勾选，先到者生效**；任意一个触发后另一个自动清掉（避免残留标志打断下一次播放）。
+- 「关闭定时」一次清掉两个标志。
+- 倒计时显示在播放条右侧：只有数字定时是 `⏰ 23:45`；叠加播完当前是 `⏰ 23:45 ·播完`；只有播完当前是 `⏰ 播完暂停`。
 
 ### 3.8 发现页
 - 顶部 Tab：推荐 / 热门（两个数据源）。
@@ -177,6 +180,17 @@ bili.reportPlayerState(state) // { playing:boolean, title:string }  用于托盘
 - 已登录：左侧收藏夹列表（文件夹图标+名称+数量），右侧该收藏夹内容网格。
 - 登录弹层：三个页签 —— 扫码登录 / 窗口登录 / 粘贴 Cookie。粘贴 Cookie 页签是一个多行 textarea（裸 `SESSDATA` 值或整行 Cookie 都认）+「从剪贴板粘贴」+「登录」，下方可展开「怎么拿到 SESSDATA」的步骤说明（`SESSDATA` 是 HttpOnly，`document.cookie` 读不到，必须从 `Application → Cookies` 复制）；失败原因就近显示在面板里，不弹 toast 了事。
 
+### 3.12.5 自动生成播放目录（`src/js/playlist.js`）
+- 「播放目录」= 把一批视频一次性灌进播放队列并从第一首开始播（复用现有队列结构，cid 留空、播放时按需取详情，不预拉 50 个 cid）。
+- 四个来源（上限 50 条）：
+  - **综合热门** `bili.popular`（无需登录）
+  - **音乐排行榜** `bili.ranking({rid:3})`（无需登录）
+  - **我的收藏** `bili.favFolders` 取第一个夹 → `bili.favList`（需登录；folder.id 就是 media_id）
+  - **相关推荐** `bili.related({bvid})`，种子视频本身放队首 —— 从任意视频卡片「⋯」菜单的「以此生成播放目录」触发。
+- 入口三处：侧边栏「自动目录」（弹层选来源）、队列抽屉头部「自动目录」链接（空队列快捷入口）、卡片菜单。
+- 生成中显示 loading 弹层，`store.playing` 变化（真正开始播）后自动关闭。
+- 失败降级：来源拉不到内容时 toast 明确原因（如「未找到收藏夹，请先登录并收藏视频」），不写坏现有队列。
+
 ### 3.13 设置页
 - 默认音质：64K / 132K / 192K / 杜比 / Hi-Res（下拉）。
 - 默认倍速：滑块。
@@ -202,7 +216,6 @@ bili.reportPlayerState(state) // { playing:boolean, title:string }  用于托盘
 |---|---|
 | `volume` / `rate` / `quality` / `playMode` | 播放器偏好 |
 | `theme` / `showLyric` / `autoNext` / `minimizeToTray` / `windowBounds` | 界面偏好 |
-| `sleepTimer` | 定时关闭（0 = 没设） |
 | `lastRoute` | 上次所在页面，启动时还原（`discover` / `search` / `ranking` / `history` / `fav` / `settings`） |
 | `cookie` / `user` | 登录态。Cookie 只存在主进程，渲染进程拿不到 `SESSDATA` 原文 |
 | `session` | 播放现场快照 `{queue, currentIndex, playing, position, updatedAt}` |
@@ -217,6 +230,7 @@ bili.reportPlayerState(state) // { playing:boolean, title:string }  用于托盘
 **会话快照的时序**（`src/js/session.js`）
 
 - 队列 / 曲目变化（结构变化）800ms 内落盘；播放进度 5s 一次。不要每秒写盘。
+- 定时关闭的两个开关（「播完当前暂停」标志 + 数字倒计时）都是**内存态，不落盘**——重启后定时自然失效，符合「睡前定时」的使用预期。
 - 队列为空且没在播时**不写**。否则「打开应用啥也没听就关掉」会用空快照把上次的队列和断点盖掉——这个坑踩过。
 - 启动时 `restoreSession()` 只回填队列、`currentIndex` 和进度（记到 `pendingSeek`，等 `loadedmetadata` 再 seek），**不自动出声**；用户按下播放才从那个秒数继续。
 - 「最近在听」点历史条目走条目的 `lastPos` 续播，和上面的断点是两条独立路径，互不覆盖。
@@ -286,14 +300,15 @@ bili.reportPlayerState(state) // { playing:boolean, title:string }  用于托盘
 1. `cd app && npx electron .` 能直接启动，无控制台报错。
 2. 发现页能加载出真实 B 站视频卡片（有封面、标题、UP 主、时长）。
 3. 点任意卡片能出声（默认 192K 音质），底部播放条同步显示。
-4. 拖动进度条能 seek，音量/倍速生效。
-5. 播放模式切换、队列增删排序、定时关闭可用。
+4. 拖动进度条能 seek，音量/倍速生效；倍速通过下拉列表选择，档位 0.5–2.0x。
+5. 播放模式切换、队列增删排序、定时关闭可用；「播完当前暂停」和「定时暂停」能同时启用、先到者触发，触发后另一个自动清掉。
 6. 全屏播放页能展开/收起，黑胶旋转动画正常。
 7. 搜索能出结果并播放。
 8. 排行榜能切 Tab 并播放。
 9. 深色/浅色主题切换正常。
 10. 窗口最小化/最大化/关闭按钮正常，关闭时若开了「最小化到托盘」则隐藏到托盘。
 11. 播放中关窗再开：队列、曲目、播放进度还原，且不自动出声；上次所在页面也还原（详见 3.15）。
+12. 侧边栏「自动目录」能一键生成队列并开始播放（热门/榜单无需登录）；任一视频卡片菜单「以此生成播放目录」生成相关推荐队列。
 
 ## 7. 注意
 

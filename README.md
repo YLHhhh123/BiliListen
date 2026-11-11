@@ -29,6 +29,7 @@ bili-listen/
     │       ├── api.js             # window.bili 封装
     │       ├── store.js           # 全局状态 + localStorage
     │       ├── player.js          # 音频播放内核
+    │       ├── playlist.js        # 自动生成播放目录（热门/榜单/收藏/相关推荐）
     │       ├── router.js          # hash 路由
     │       ├── utils.js           # el() / 格式化 / 二分查找
     │       ├── debug-bridge.js    # CDP 自动化句柄（window.__bili）
@@ -36,7 +37,8 @@ bili-listen/
     │       └── components\        # titlebar/sidebar/playbar/queue/card/toast/modal
     ├── scripts\
     │   ├── launch.js              # 启动器（清 ELECTRON_RUN_AS_NODE）
-    │   ├── build.js               # 打包脚本
+    │   ├── build.js               # 打包脚本（检测 certs\codesign.pfx 自动签名）
+    │   ├── make-cert.js           # 自签名代码签名证书生成（一次性）
     │   ├── verify.js              # CDP 自动化验收（10 项）
     │   ├── verify-settings.js     # 设置页验收（11 项）
     │   ├── verify-packaged.js     # 打包版验收（9 项，连已启动的 exe）
@@ -70,7 +72,19 @@ node scripts\build.js
 2. 装完自动在**桌面**和**开始菜单**创建 `BiliListen` 快捷方式，并直接启动
 3. 控制面板「应用和功能」里能正常卸载（卸载**不会删**你的数据）
 
-安装包不带数字签名，Windows SmartScreen 可能提示「未知发布者」，点「更多信息 → 仍要运行」即可。
+## 代码签名（自签名，凭证可复用）
+
+```powershell
+cd app
+node scripts\make-cert.js        # 一次性：生成自签名代码签名证书（10 年有效）
+node scripts\build.js            # 检测到 certs\codesign.pfx 就自动签名
+```
+
+- 证书和密码落在 `certs\`（已在 `.gitignore`，绝不进仓库）。生成一次长期复用；以后换商业证书只替换 PFX 文件，构建脚本不用动。
+- 签名带 **DigiCert RFC3161 时间戳**：证书将来过期，已签好的安装包依然验证有效。
+- 边界要说清楚：自签名给安装包挂上真实的签名者信息（不再「unsigned」），导入过证书的机器完全信任；但**陌生机器上的 SmartScreen「未知发布者」提示消除不了**——那靠 CA 信誉链，公开分发想全绿只能买商业证书（OV 约 1000–3000 元/年）。
+
+未签名的安装包首次运行，SmartScreen 点「更多信息 → 仍要运行」即可。
 
 ## 数据存在哪（关掉再开接着听）
 
@@ -91,7 +105,11 @@ node scripts\build.js
 
 ```powershell
 cd app
-node scripts\verify.js
+node scripts\verify.js             # 基础 10 项
+node scripts\verify-settings.js    # 设置与倍速
+node scripts\verify-persistence.js # 关掉再开 18 项
+node scripts\verify-login.js       # 登录 8 项
+node scripts\verify-cookie-import.js
 ```
 
 用 CDP 连进渲染进程，10 项全过（实测 10/10）：
@@ -130,6 +148,7 @@ cd app
 node scripts\build.js            # 安装包 + 目录版（约 90 秒）
 node scripts\build.js --dir      # 只出目录版，快，验收用
 node scripts\make-icon.js        # 改图标后重出 build\icon.ico（SVG → 10 档尺寸）
+node scripts\make-cert.js        # 一次性：生成自签名代码签名证书（见「代码签名」一节）
 ```
 
 构建用 electron-builder：应用代码打成 `app.asar`（1.7 MB），Electron 运行时保留 `zh-CN`/`en-US` 两套语言包。
@@ -336,11 +355,12 @@ PASS  8. 弹层内二维码实际渲染           naturalWidth=280
 | 通知栏 12 个 action | 托盘右键菜单 + 全局媒体键 |
 | `music_podcast_bottom_play_view` | 底部 88px 播放条 |
 | `music_podcast_include_play_panel` | 全屏「正在播放」页 |
-| `PodcastSpeedSeekBar` 6 档 | 倍速菜单 **0.5 / 0.75 / 1.0 / 1.25 / 1.5 / 2.0**（与 APK 数组逐值一致，默认 1.0×） |
+| `PodcastSpeedSeekBar` 6 档 | 倍速**下拉列表选择** **0.5 / 0.75 / 1.0 / 1.25 / 1.5 / 2.0**（与 APK 数组逐值一致，默认 1.0×） |
 | `music_podcast_dialog_player_setting` | 播放设置弹层 |
-| 「定时关闭」超级菜单 | 定时关闭弹层（15/30/45/60/90 分钟 / **播完当前曲目** / 关闭定时） |
+| 「定时关闭」超级菜单 | 定时关闭弹层：**播完当前曲目暂停** + **15/30/45/60/90/120 分钟定时暂停**，两个开关可同时启用（先到者触发，触发后另一个自动清掉） |
 | 播放列表 / 收藏夹 / 最近在听 | 队列抽屉 / 收藏页 / 历史页 |
 | 自动连播相关视频 | 播放到 90% 预取下一首 |
+| **自动生成播放列表** | **侧边栏「自动目录」**：一键把热门 / 音乐榜 / 收藏夹灌进队列开听；任意视频卡片「⋯ → 以此生成播放目录」按相关推荐连续成串 |
 | 分P 展开 | 多分P视频自动拆成队列项 |
 | 字幕当歌词 | `player/v2` 字幕轨 → 歌词滚动 |
 
