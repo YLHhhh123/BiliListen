@@ -18,7 +18,7 @@ bili-listen/
     │   ├── main.js                # 主进程：窗口/托盘/媒体键/IPC
     │   ├── preload.js             # contextBridge 暴露 window.bili
     │   └── services\
-    │       ├── bili.js            # B 站 API 封装（wbi 签名 / playurl / 字幕）
+    │       ├── bili.js            # B 站 API 封装（wbi 签名 / playurl / 字幕 / 互动写操作）
     │       ├── proxy.js           # 本地音频代理（补 Referer + Range 透传）
     │       └── tv-login.js        # TV 端扫码登录
     ├── src\                       # 前端（glm-5.3-flash 子代理实现）
@@ -62,11 +62,11 @@ npm start          # 或双击 start.bat
 cd app
 node scripts\build.js
 # 产物：
-#   dist\BiliListen-Setup-1.1.1.exe     安装包（66 MB，已自签名）
+#   dist\BiliListen-Setup-1.1.2.exe     安装包（已自签名）
 #   dist\BiliListen-win32-x64\          免安装目录版（整个文件夹拷走也能跑）
 ```
 
-双击 `BiliListen-Setup-1.1.1.exe`，跟市面上的桌面软件一样：
+双击 `BiliListen-Setup-1.1.2.exe`，跟市面上的桌面软件一样：
 
 1. 选安装位置（默认 `%LOCALAPPDATA%\Programs\BiliListen`，**当前用户安装，不要管理员权限**，不弹 UAC）
 2. 装完自动在**桌面**和**开始菜单**创建 `BiliListen` 快捷方式，并直接启动
@@ -133,6 +133,45 @@ v1.1.1 针对「自动登录会不会被盗号」做了加固，三层边界如�
 
 **外发边界**：全项目没有遥测、没有第三方统计，网络请求只指向 B 站自家域名（`api.bilibili.com`、`passport.bilibili.com`、`*.hdslb.com` CDN）。可用 `verify-sealed-storage.js` / `verify-sealed-e2e.js` 复核加密与渲染层隔离。
 
+## v1.1.2：字幕修复与视频互动
+
+### 字幕获取（Bug 修复）
+
+旧实现的 `getSubtitle()` 只查 `x/player/v2`（无 WBI 签名），拿到空列表就静默返回 `[]`。实测结论（2026-11）：
+
+- `x/player/v2` 与 `x/player/wbi/v2` 在**匿名 / 游客态**下 `subtitle.subtitles` 恒为空数组 —— B 站已把字幕列表收紧到**登录态 SESSDATA + WBI 签名**的端点，签名版才是 Web 播放器实际调用的那个；
+- `x/web-interface/view` 的 `data.subtitle.list` 能列出 CC 字幕轨，但 `subtitle_url` 为空，只能当「有没有字幕」的信号，不能直接下载；
+- 旧代码把所有异常（未登录 / 风控 / 接口报错）统统伪装成「暂无歌词」，用户无从判断是哪个环节坏了。
+
+新链路：`x/player/wbi/v2`（WBI 签名 + Cookie）→ 回退 `x/player/v2` → 用 `view.subtitle.list` 兜底判断。返回**结构化状态**而不是静默空数组：
+
+| `reason` | UI 显示 |
+|---|---|
+| `ok` | 正常逐行滚动歌词（中文 / AI 中文优先） |
+| `no_subtitle` | 「该视频暂无字幕」 |
+| `need_login` | 「该视频有字幕，请登录后查看」 |
+| `player_failed` / `download_failed` | 具体接口错误，不再一律「暂无歌词」 |
+
+> 字幕覆盖率仍受 B 站限制：只有 UP 主上传的 CC 字幕或 B 站 AI 字幕才有歌词，且**需要登录**才能拿到列表。
+
+### 视频互动（二级菜单）
+
+在「正在播放」全屏页的次要控制区点 **⚡ 互动** 展开一级菜单，进入对应二级菜单：
+
+```
+⚡ 互动
+├─ 投币    → 投 1 币 / 投 2 币
+├─ 收藏    → 收藏夹列表（可多选，不勾选=默认收藏夹）→ 收藏
+└─ 关注作者 → 关注 / 取关
+```
+
+- 所有写操作走主进程 IPC（`api:coin` / `api:favorite` / `api:follow`），**cookie 与 `bili_jct`(csrf) 不下发渲染层**，前端无法伪造凭据；
+- 写接口统一 `POST` + `csrf=bili_jct`，缺登录 / 缺 csrf / 风控 `-412` / 限流 `-509` / 重复投币 `34005` / 硬币不足 `34004` / 已收藏 `11202` 等都映射成人话 toast；
+- 防御连点（进行中禁用按钮）、操作成功/失败都有反馈；收藏夹读取失败时自动降级到「收藏到默认收藏夹」；
+- 未登录时点任何操作都只会在主进程被 `-101` 拒绝，**不会发出真实请求、不会消耗硬币**。
+
+> `bili_jct` 只能由 B 站登录流程下发（浏览器首页/游客指纹接口都不给）。若当前登录态里没有它（例如手动只粘了 SESSDATA），会明确提示「请重新登录」，而不是发出注定失败的写请求。
+
 ## 自动化验收
 
 ```powershell
@@ -144,6 +183,8 @@ node scripts\verify-login.js       # 登录 8 项
 node scripts\verify-cookie-import.js
 node scripts\verify-sealed-storage.js  # 加密信封与 ConfigStore 单测 15 项
 node scripts\verify-sealed-e2e.js      # 真机 DPAPI：迁移/补做密封/强杀重启 12 项
+node scripts\verify-interactions.js    # v1.1.2 字幕链路 + 写操作单测 29 项
+node scripts\verify-interactions-e2e.js # v1.1.2 二级菜单真机 CDP 14 项
 ```
 
 用 CDP 连进渲染进程，10 项全过（实测 10/10）：
@@ -173,6 +214,8 @@ PASS 10. 队列抽屉打开
 | `node scripts\verify-features.js` | **v1.1.0 新功能专项**：倍速下拉 6 档 / 定时关闭双开关（播完当前 + N 分钟可同时启用）/ 侧边栏自动目录（热门/榜单/收藏一键灌队列）/ 卡片菜单「以此生成播放目录」 | **10/10** |
 | `node scripts\verify-sealed-storage.js` | **v1.1.1 安全专项**：信封纯函数 / 坏密文兜底 / 加密器抛错明文兜底 / 旧版明文迁移 / `.bak` 回滚 / 解密失败不丢其余配置 | **15/15** |
 | `node scripts\verify-sealed-e2e.js` | **v1.1.1 真机 DPAPI**：旧版明文自动迁移、密钥延迟落盘后自动补做密封、`getAllConfig` 不下发 cookie、渲染层注入被剥离、**强杀重启后登录态恢复** | **12/12** |
+| `node scripts\verify-interactions.js` | **v1.1.2 单测**：csrf 解析 / 未登录·缺 csrf·风控·限流·重复投币错误码 / 三个写接口请求体 / 字幕 wbi 主路径·回退·三级 reason·语言优先 | **29/29** |
+| `node scripts\verify-interactions-e2e.js` | **v1.1.2 真机 CDP**：二级菜单三级结构、未登录失败反馈、返回/ESC、收藏夹降级、字幕结构化 reason、无渲染异常（空登录态，不花真币） | **14/14** |
 
 > **测试全程静音 + 不弹窗**：`verify.js` 启动参数带 `--mute-audio --hidden`，主进程 `isHidden` 分支不调用 `win.show()`，任务栏都看不到窗口。
 >
@@ -399,9 +442,10 @@ PASS  8. 弹层内二维码实际渲染           naturalWidth=280
 | 自动连播相关视频 | 播放到 90% 预取下一首 |
 | **自动生成播放列表** | **侧边栏「自动目录」**：一键把热门 / 音乐榜 / 收藏夹灌进队列开听；任意视频卡片「⋯ → 以此生成播放目录」按相关推荐连续成串 |
 | 分P 展开 | 多分P视频自动拆成队列项 |
-| 字幕当歌词 | `player/v2` 字幕轨 → 歌词滚动 |
+| 字幕当歌词 | `player/wbi/v2`（WBI 签名 + 登录态）字幕轨 → 中文优先 → 歌词滚动；无字幕 / 需登录 / 接口失败分别提示 |
+| **视频互动** | 全屏页 **⚡ 互动** 二级菜单：投币（1/2 币）/ 收藏（选收藏夹）/ 关注·取关作者 |
 
-砍掉的：弹幕、投币、点赞（听视频场景用不上，保留「在浏览器打开」外链）。
+砍掉的：弹幕（听视频用不上，保留「在浏览器打开」外链）。
 
 ### 实机截图
 
@@ -415,8 +459,8 @@ PASS  8. 弹层内二维码实际渲染           naturalWidth=280
 
 1. **付费/大会员内容**：`playurl` 只返 64K/132K 试听片段，需要登录且开通大会员。桌面端会如实弹「没有可用的音频流」。
 2. **地区限制**：港澳台/海外番剧需要对应地区 IP。
-3. **登录方式**：三套（TV 扫码 / 内嵌网页 / 粘贴 Cookie）。扫码是主方案，走 B 站 TV 端官方接口。Cookie 明文存 `%APPDATA%\bili-listen-desktop\bili-listen-config.json`。
-4. **字幕覆盖率**：只有 UP 主上传或 B 站 AI 生成的字幕才有歌词，大部分音乐区视频没有。
+3. **登录方式**：三套（TV 扫码 / 内嵌网页 / 粘贴 Cookie）。扫码是主方案，走 B 站 TV 端官方接口。Cookie 以加密信封存在 `%APPDATA%\BiliListen\bili-listen-config.json`（见「账号安全」）。写操作（投币/收藏/关注）还需要登录态带 `bili_jct`（csrf），只粘 SESSDATA 时会提示重新登录。
+4. **字幕覆盖率**：只有 UP 主上传的 CC 字幕或 B 站 AI 字幕才有歌词，且字幕列表需要登录态 + WBI 签名才能拿到；匿名视角下 B 站返回空列表（不是代码 bug，UI 会提示「请登录后查看」）。
 5. **音频编码**：默认 AAC（mp4a.40.2），Chromium 原生支持。杜比（EC3）和 Hi-Res（FLAC）需要大会员且部分设备解码不了，选了会静默回落到 192K。
 
 ---

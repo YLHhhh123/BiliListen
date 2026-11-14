@@ -1,7 +1,7 @@
 {
   "name": "bili-listen-desktop",
   "productName": "BiliListen",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "BiliListen · 哔哩哔哩听视频桌面版",
   "main": "electron/main.js",
   "author": "耄耋",

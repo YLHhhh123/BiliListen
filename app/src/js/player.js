@@ -211,11 +211,19 @@ export async function playVideo(item, opts = {}) {
 
 async function loadLyrics(bvid, cid) {
   const res = await bili.subtitle({ bvid, cid });
-  if (res.ok && res.data?.lines) {
-    store.set({ lyrics: res.data.lines });
-  } else {
-    store.set({ lyrics: [] });
+  if (res.ok && res.data?.ok && res.data.lines?.length) {
+    store.set({ lyrics: res.data.lines, lyricsStatus: 'ok' });
+    return;
   }
+  // 区分「真没字幕」和「获取失败」：以前一律塞空数组，用户只看到「暂无歌词」，
+  // 登录过期 / 接口报错 / 风控全被吞掉。现在把原因交给 UI 显示。
+  const d = res.ok ? res.data : null;
+  const reason = d?.reason || (res.ok ? '' : 'request_failed');
+  store.set({
+    lyrics: [],
+    lyricsStatus: reason === 'no_subtitle' ? 'empty' : 'error',
+    lyricsMessage: d?.message || res.error || (reason === 'need_login' ? '该视频有字幕，请登录后查看' : '字幕获取失败'),
+  });
 }
 
 /** 播放队列中指定索引的项 */

@@ -100,4 +100,6 @@ export const store = createStore({
   sleepRemaining: 0,       // 剩余秒数
   pauseAfterCurrent: false, // 播完当前曲目暂停；内存态，重启自动清空
   lyrics: [],              // 当前字幕 lines
+  lyricsStatus: 'idle',    // idle | ok | empty | error（区分「没字幕」和「获取失败」）
+  lyricsMessage: '',       // 失败原因，给 UI 显示
 });

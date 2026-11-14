@@ -149,6 +149,95 @@ async function plainGet(path, params = {}, opts = {}) {
   return j.data;
 }
 
+/** 从 Cookie 串里取 csrf（bili_jct）；B 站所有写接口都要求它 */
+function pickCsrf(cookie) {
+  const c = normalizeCookie(cookie);
+  const m = /(?:^|;\s*)bili_jct=([^;]*)/.exec(c);
+  return m ? decodeURIComponent(m[1]) : '';
+}
+
+/**
+ * 写接口通用 POST（application/x-www-form-urlencoded）。
+ *  - 自动带 Cookie / Referer / Origin / csrf（bili_jct）
+ *  - 无 bili_jct 直接抛 NEED_CSRF，避免发出去得到含糊的 -111
+ *  - 业务非 0 码映射成可读错误，code 保留给 UI 判「未登录 / 风控」
+ */
+async function actionPost(path, params = {}, opts = {}) {
+  const cookie = opts.cookie || '';
+  if (!cookie) {
+    const e = new Error('请先登录 B 站账号');
+    e.code = -101;
+    e.reason = 'need_login';
+    throw e;
+  }
+  const csrf = pickCsrf(cookie);
+  if (!csrf) {
+    const e = new Error('登录信息里缺少 bili_jct（csrf），请重新登录后再试');
+    e.code = 'NEED_CSRF';
+    e.reason = 'need_csrf';
+    throw e;
+  }
+  const body = new URLSearchParams();
+  for (const [k, v] of Object.entries({ ...params, csrf })) {
+    if (v === undefined || v === null) continue;
+    body.append(k, String(v));
+  }
+  const headers = {
+    'Content-Type': 'application/x-www-form-urlencoded',
+    'User-Agent': UA,
+    Referer: (opts.referer || 'https://www.bilibili.com/'),
+    Origin: 'https://www.bilibili.com',
+    'Accept-Language': 'zh-CN,zh;q=0.9',
+    Cookie: normalizeCookie(cookie),
+  };
+  const res = await fetch(path, { method: 'POST', headers, body: body.toString(), signal: AbortSignal.timeout(opts.timeout || 15000) });
+  const text = await res.text();
+  let j;
+  try {
+    j = JSON.parse(text);
+  } catch {
+    throw new Error(`接口返回非 JSON (${res.status}): ${text.slice(0, 160)}`);
+  }
+  if (j.code !== 0) {
+    const e = new Error(ACTION_ERRORS[j.code] || j.message || `操作失败 (${j.code})`);
+    e.code = j.code;
+    e.rawMessage = j.message || '';
+    e.reason = ACTION_REASONS[j.code] || 'unknown';
+    throw e;
+  }
+  return j.data || {};
+}
+
+/** 常见业务码 → 人话（写接口） */
+const ACTION_ERRORS = {
+  '-101': '账号未登录，请重新登录',
+  '-111': 'csrf 校验失败，请重新登录',
+  '-403': '访问权限不足（风控 / 等级限制）',
+  '-412': '请求被拦截，请稍后再试',
+  '-509': '请求过于频繁，请稍后再试',
+  11001: '操作失败，请稍后重试',
+  34002: '不能给自己投币',
+  34003: 'UP 主未开放投币',
+  34004: '投币数量不足',
+  34005: '该视频已经投过币了',
+  11202: '已收藏过该视频',
+  22002: '不能关注自己',
+  22003: '已达到关注上限',
+  22009: '关注失败，请稍后重试',
+};
+const ACTION_REASONS = {
+  '-101': 'need_login',
+  '-111': 'need_csrf',
+  '-403': 'forbidden',
+  '-412': 'risk',
+  '-509': 'rate_limited',
+  34002: 'self_coin',
+  34003: 'coin_closed',
+  34004: 'no_coin',
+  34005: 'already_coined',
+  11202: 'already_faved',
+};
+
 // ---------------- 业务接口 ----------------
 
 /** 搜索视频 */
@@ -442,43 +531,112 @@ async function getFavList({ cookie, mediaId, page = 1, pageSize = 40 } = {}) {
 
 /**
  * 字幕（当作「歌词」用）
- * 手机版听视频的歌词来自字幕轨；桌面端用 player/v2 拿字幕列表再下载 json。
- * 返回 [{from,to,content}]，没有字幕时返回空数组（不报错）。
+ *
+ * 逆向 / 实测结论（2026-11）：
+ *  - `x/player/v2`（无签名）与 `x/player/wbi/v2` 在匿名/游客态下 subtitle.subtitles
+ *    恒为空数组；字幕列表要登录态 SESSDATA + WBI 签名才返回带 URL 的条目。
+ *  - `x/web-interface/view` 的 data.subtitle.list 能列出 CC 字幕轨，但 subtitle_url
+ *    为空，只能当「有没有字幕」的兜底信号，不能直接下载。
+ *  - AI 字幕（lan 以 ai- 开头）URL 在 aisubtitle.hdslb.com，需要 Referer + Cookie。
+ *
+ * 链路：wbi/v2（签名 + Cookie）→ 回退 player/v2 → 回退 view.subtitle.list 探测。
+ * 返回结构化状态：{ok, lines, lan, lanDoc, reason}，不再静默把失败伪装成「无字幕」，
+ * 渲染层据此区分「暂无字幕」与「需要登录 / 接口异常」。
  */
-async function getSubtitle({ bvid, cid } = {}, ctx = {}) {
+async function getSubtitle({ bvid, cid, aid, preferLan = '' } = {}, ctx = {}) {
   if (!bvid) throw new Error('缺少 bvid');
+  const cookie = ctx.cookie || '';
   let useCid = cid;
+  let useAid = aid;
+  if (!useCid || !useAid) {
+    // 补 aid/cid 只是「尽量带上」：view 挂了不该让整条字幕链路放弃，
+    // 用 bvid + 已有 cid 仍能请求 player 端点。
+    try {
+      const v = await plainGet('https://api.bilibili.com/x/web-interface/view', { bvid }, { cookie });
+      useCid = useCid || v.cid;
+      useAid = useAid || v.aid;
+    } catch {}
+  }
   if (!useCid) {
-    const v = await plainGet('https://api.bilibili.com/x/web-interface/view', { bvid }, { cookie: ctx.cookie });
-    useCid = v.cid;
+    return { ok: false, lines: [], reason: 'view_failed', message: '无法获取视频 cid' };
   }
-  let pv;
+  const params = { bvid, cid: useCid };
+  if (useAid) params.aid = useAid;
+
+  // 1) 主路径：WBI 签名版（Web 播放器实际用的端点）
+  let subs = [];
+  let endpoint = 'wbi/v2';
   try {
-    pv = await plainGet('https://api.bilibili.com/x/player/v2', { bvid, cid: useCid }, { cookie: ctx.cookie });
-  } catch {
-    return { lines: [] };
+    const pv = await wbiGet('https://api.bilibili.com/x/player/wbi/v2', params, {
+      cookie,
+      headers: { Referer: `https://www.bilibili.com/video/${bvid}/` },
+    });
+    subs = pv?.subtitle?.subtitles || [];
+  } catch (e) {
+    // 2) 回退：旧的无签名端点（部分老接口/风控降级时仍可用）
+    try {
+      const pv = await plainGet('https://api.bilibili.com/x/player/v2', params, {
+        cookie,
+        headers: { Referer: `https://www.bilibili.com/video/${bvid}/` },
+      });
+      subs = pv?.subtitle?.subtitles || [];
+      endpoint = 'player/v2';
+    } catch (e2) {
+      return {
+        ok: false,
+        lines: [],
+        reason: 'player_failed',
+        message: e2.message || e.message || '字幕接口请求失败',
+      };
+    }
   }
-  const subs = pv?.subtitle?.subtitles || [];
-  if (!subs.length) return { lines: [] };
-  // 优先中文
-  const pick =
-    subs.find((s) => /^(zh|ai-zh)/i.test(s.lan || '')) || subs.find((s) => (s.lan || '').startsWith('ai-')) || subs[0];
+
+  if (!subs.length) {
+    // 3) 用 view 判断「确实没有字幕」还是「登录态不足导致列表为空」
+    let hasTrack = false;
+    try {
+      const v = await plainGet('https://api.bilibili.com/x/web-interface/view', { bvid }, { cookie });
+      hasTrack = (v?.subtitle?.list || []).length > 0;
+    } catch {}
+    return {
+      ok: true,
+      lines: [],
+      reason: hasTrack ? 'need_login' : 'no_subtitle',
+      endpoint,
+      message: hasTrack ? '该视频有字幕，需登录后在 B 站账号查看' : '',
+    };
+  }
+
+  // 语言优先级：显式指定 > 中文（含 AI 中文）> 任一 AI > 第一条
+  const rank = (s) => {
+    const lan = String(s.lan || '');
+    if (preferLan && lan === preferLan) return 0;
+    if (/^zh/i.test(lan) || /^ai-zh/i.test(lan)) return 1;
+    if (lan.startsWith('ai-')) return 2;
+    return 3;
+  };
+  const pick = [...subs].sort((a, b) => rank(a) - rank(b))[0];
   let url = normalizeUrl(pick.subtitle_url || '');
   if (url.startsWith('//')) url = 'https:' + url;
-  if (!url) return { lines: [] };
+  if (!url) {
+    return { ok: false, lines: [], reason: 'no_url', lan: pick.lan, message: '字幕地址为空' };
+  }
+
   try {
-    const j = await requestJson(url, { cookie: ctx.cookie, headers: { Referer: `https://www.bilibili.com/video/${bvid}/` } });
+    const j = await requestJson(url, {
+      cookie,
+      headers: { Referer: `https://www.bilibili.com/video/${bvid}/` },
+    });
     return {
+      ok: true,
+      lines: (j.body || []).map((b) => ({ from: b.from, to: b.to, content: b.content })),
       lan: pick.lan,
       lanDoc: pick.lan_doc,
-      lines: (j.body || []).map((b) => ({
-        from: b.from,
-        to: b.to,
-        content: b.content,
-      })),
+      endpoint,
+      reason: 'ok',
     };
-  } catch {
-    return { lines: [] };
+  } catch (e) {
+    return { ok: false, lines: [], reason: 'download_failed', message: e.message || '字幕下载失败' };
   }
 }
 
@@ -552,6 +710,97 @@ async function getHistory({ cookie, page = 1, pageSize = 20 } = {}) {
   };
 }
 
+// ---------------- 视频互动（写操作，均需登录 + csrf） ----------------
+
+/**
+ * 投币。B 站规则：一个视频最多 2 币，且只能投一次（选 1 或 2）。
+ * @param {number} count 1 | 2
+ */
+async function coinVideo({ bvid, aid, count = 1, like = 0 } = {}, ctx = {}) {
+  if (!bvid && !aid) throw new Error('缺少 bvid');
+  const n = Number(count);
+  if (n !== 1 && n !== 2) throw new Error('投币数量只能是 1 或 2');
+  const params = { multiply: n, select_like: like ? 1 : 0 };
+  if (aid) params.aid = aid;
+  else params.bvid = bvid;
+  const d = await actionPost('https://api.bilibili.com/x/web-interface/coin/add', params, {
+    cookie: ctx.cookie,
+    referer: `https://www.bilibili.com/video/${bvid || aid}/`,
+  });
+  return { ok: true, count: n, like: !!like, data: d };
+}
+
+/**
+ * 收藏到收藏夹。mediaIds 为空时用「默认收藏夹」（B 站行为：不传 add_media_ids）。
+ * 支持一次投多个夹（逗号分隔）。rid 必须是视频 aid，缺失时先用 view 补一次。
+ */
+async function favoriteVideo({ bvid, aid, mediaIds = [], add = true } = {}, ctx = {}) {
+  if (!bvid && !aid) throw new Error('缺少 bvid');
+  let rid = Number(aid) || 0;
+  if (!rid) {
+    const v = await plainGet('https://api.bilibili.com/x/web-interface/view', { bvid }, { cookie: ctx.cookie });
+    rid = Number(v.aid) || 0;
+  }
+  if (!rid) throw new Error('无法获取视频 aid');
+  const ids = (Array.isArray(mediaIds) ? mediaIds : String(mediaIds || '').split(/[,\s]+/))
+    .map((x) => String(x).trim())
+    .filter((x) => /^\d+$/.test(x));
+  const params = {
+    rid,
+    type: 2,
+    add_media_ids: add ? ids.join(',') : '',
+    del_media_ids: add ? '' : ids.join(','),
+  };
+  const d = await actionPost('https://api.bilibili.com/x/v3/fav/resource/deal', params, {
+    cookie: ctx.cookie,
+    referer: `https://www.bilibili.com/video/${bvid || aid}/`,
+  });
+  return { ok: true, add, mediaIds: ids, data: d };
+}
+
+/**
+ * 查询当前视频是否已被收藏 / 已投币（给 UI 回显状态）。
+ * 关注状态由 UI 本地维护：B 站的关注查询接口要 WBI 且各版本字段不一致，
+ * 与其猜字段不如让用户每次操作后拿接口结果为准。
+ */
+async function getVideoRelation({ bvid, aid } = {}, ctx = {}) {
+  const cookie = ctx.cookie || '';
+  let useAid = aid;
+  if (!useAid && bvid) {
+    try {
+      const v = await plainGet('https://api.bilibili.com/x/web-interface/view', { bvid }, { cookie });
+      useAid = v.aid;
+    } catch {}
+  }
+  const result = { favourite: false, coin: false, like: false };
+  if (useAid) {
+    try {
+      const d = await plainGet('https://api.bilibili.com/x/web-interface/archive/relation', { aid: useAid }, { cookie });
+      result.favourite = !!d?.favourite;
+      result.coin = !!d?.coin;
+      result.like = !!d?.like;
+    } catch {}
+  }
+  return result;
+}
+
+/**
+ * 关注 / 取关作者。
+ * act: 1=关注 2=取关 3=悄悄关注 4=取消悄悄关注 5=拉黑 6=取消拉黑
+ * 用 /x/relation/modify（Web 端标准写接口，带 csrf）。
+ */
+async function followAuthor({ mid, act = 1, reSrc = 12 } = {}, ctx = {}) {
+  const m = Number(mid);
+  if (!m || m <= 0) throw new Error('缺少作者 mid');
+  const a = Number(act);
+  if (![1, 2].includes(a)) throw new Error('不支持的关注操作');
+  const d = await actionPost('https://api.bilibili.com/x/relation/modify', { fid: m, act: a, re_src: reSrc }, {
+    cookie: ctx.cookie,
+    referer: `https://space.bilibili.com/${m}/`,
+  });
+  return { ok: true, mid: m, act: a, following: a === 1, data: d };
+}
+
 module.exports = {
   UA,
   AUDIO_QUALITY,
@@ -562,6 +811,10 @@ module.exports = {
   getPopular,
   getPlayUrl,
   getSubtitle,
+  getVideoRelation,
+  coinVideo,
+  favoriteVideo,
+  followAuthor,
   resolveInput,
   checkLogin,
   getFavFolders,
@@ -570,4 +823,6 @@ module.exports = {
   requestJson,
   plainGet,
   wbiGet,
+  actionPost,
+  pickCsrf,
 };

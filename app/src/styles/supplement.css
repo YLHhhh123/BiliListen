@@ -373,6 +373,75 @@
 }
 .np-secondary { position: relative; }
 
+/* ---------- 视频互动二级菜单 ---------- */
+.action-menu {
+  position: absolute;
+  bottom: 100%;
+  right: 0;
+  margin-bottom: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  z-index: 30;
+  min-width: 220px;
+  max-height: 360px;
+  overflow-y: auto;
+}
+.action-menu-head {
+  font-size: 12px;
+  color: var(--text-3);
+  padding: 2px 6px 6px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 4px;
+}
+.action-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.action-item:hover { background: var(--bg-3); }
+.action-item-main { display: flex; flex-direction: column; gap: 2px; }
+.action-item-label { font-size: 13px; color: var(--text-1); }
+.action-item-desc { font-size: 11px; color: var(--text-3); }
+.action-item-arrow { font-size: 18px; color: var(--text-3); }
+.action-sub-back {
+  font-size: 12px;
+  color: var(--text-2);
+  padding: 2px 6px 6px;
+  cursor: pointer;
+}
+.action-sub-back:hover { color: var(--brand); }
+.action-option {
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-1);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.action-option:hover { background: var(--bg-3); }
+.action-option.fav-option.on { color: var(--brand); }
+.fav-check { width: 16px; text-align: center; }
+.action-menu-tip {
+  font-size: 11px;
+  color: var(--text-3);
+  padding: 6px 8px;
+  line-height: 1.5;
+}
+.action-menu-tip.err { color: #ff5470; }
+.action-apply { margin-top: 6px; width: 100%; }
+
 /* ==========================================================
  * 播放条倍速下拉：徽标 + 透明 select 覆盖
  * select 完全透明铺在徽标上，点击命中 select 弹出原生下拉；

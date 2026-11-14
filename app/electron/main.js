@@ -372,6 +372,13 @@ function registerIpc() {
   ipcMain.handle('api:resolve', wrap((p) => bili.resolveInput(p, { cookie: config.cookie })));
   ipcMain.handle('api:ranking', wrap((p) => bili.getRanking(p, { cookie: config.cookie })));
   ipcMain.handle('api:popular', wrap((p) => bili.getPopular(p, { cookie: config.cookie })));
+
+  // 视频互动（写操作）：投币 / 收藏 / 关注 / 关系回显
+  // 全部走主进程（cookie 只在主进程），渲染层拿不到凭据也无法伪造 csrf。
+  ipcMain.handle('api:coin', wrap((p) => bili.coinVideo(p, { cookie: config.cookie })));
+  ipcMain.handle('api:favorite', wrap((p) => bili.favoriteVideo(p, { cookie: config.cookie })));
+  ipcMain.handle('api:follow', wrap((p) => bili.followAuthor(p, { cookie: config.cookie })));
+  ipcMain.handle('api:videoRelation', wrap((p) => bili.getVideoRelation(p, { cookie: config.cookie })));
   ipcMain.handle(
     'api:playurl',
     wrap(async (p) => {
