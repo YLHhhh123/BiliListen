@@ -14,6 +14,7 @@ const {
   dialog,
   session,
   clipboard,
+  safeStorage,
 } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -23,6 +24,7 @@ const tvLogin = require('./services/tv-login');
 const { parseCookieInput, completeCookie } = require('./services/cookie-import');
 const { ConfigStore } = require('./services/config-store');
 const { AudioProxy } = require('./services/proxy');
+const { sealCookieField, unsealCookieField } = require('./services/sealed-cookie');
 
 // qrcode（拉 pngjs/canvas）只在真的点「扫码登录」时才需要，启动阶段不加载，
 // 冷启动能省掉一整轮依赖解析。
@@ -129,7 +131,88 @@ function migrateDataDir(target) {
 })();
 
 // ---------------- 配置持久化 ----------------
-const configStore = new ConfigStore(path.join(app.getPath('userData'), 'bili-listen-config.json'));
+// safeStorage（Windows 底层是 Chromium os_crypt）：AES 主密钥经 DPAPI 加密后
+// 写进 <userData>/Local State 的 os_crypt.encrypted_key，密钥绑定当前系统用户，
+// 换机器 / 换用户拷走配置文件也解不出 cookie。
+//
+// 坑：Local State 由 ImportantFileWriter **延迟提交**（实测约 10 秒）。若首次
+// 加密后进程在提交前被强杀/崩溃，那次用的密钥只存在于内存、从未落盘，
+// 落盘的密文就成了孤儿 —— 重启后谁也解不开，用户会「凭空掉登录」。
+// 对策：密钥没真正落盘前不写密封 cookie（此时保持明文，等同旧版行为），
+// 等密钥就绪再补做密封迁移。窗口照常启动，不阻塞首帧。
+// isEncryptionAvailable 为 false（极少数精简系统）时永久回退明文，行为同旧版。
+const LOCAL_STATE_FILE = path.join(app.getPath('userData'), 'Local State');
+
+/** os_crypt 主密钥是否已持久化到 Local State */
+function osCryptKeyPersisted() {
+  try {
+    const j = JSON.parse(fs.readFileSync(LOCAL_STATE_FILE, 'utf8'));
+    return !!(j && j.os_crypt && j.os_crypt.encrypted_key);
+  } catch {
+    return false;
+  }
+}
+
+/** 密钥落盘后才允许写密封 cookie（纯函数式门闩，供 codec getter 调用） */
+let cryptoKeyReady = osCryptKeyPersisted();
+
+/** 后台等密钥落盘；就绪后若配置仍是明文 cookie，立刻补做密封 */
+function ensureCryptoKey() {
+  if (cryptoKeyReady) return;
+  // 触发 os_crypt 生成主密钥并排队写盘（无副作用，探针串不落盘）
+  try {
+    if (safeStorage.isEncryptionAvailable()) safeStorage.encryptString('__bili_key_probe__');
+  } catch {}
+  const deadline = Date.now() + 20000;
+  const poll = () => {
+    if (osCryptKeyPersisted()) {
+      cryptoKeyReady = true;
+      if (config && typeof config.cookie === 'string' && config.cookie.trim()) {
+        saveConfig({});
+        flushConfig();
+        console.log('[secure] os_crypt 密钥已落盘，cookie 已补做密封');
+      }
+      return;
+    }
+    if (Date.now() < deadline) setTimeout(poll, 250);
+    else console.warn('[secure] os_crypt 密钥迟迟未落盘，本次保持明文，下次启动会重试');
+  };
+  setTimeout(poll, 250);
+}
+
+let _codecCache; // undefined = 未初始化；null = 不可用；{encrypt,decrypt} = 可用
+function safeStorageCodec() {
+  if (_codecCache !== undefined) return _codecCache;
+  try {
+    _codecCache = safeStorage.isEncryptionAvailable()
+      ? {
+          encrypt: (t) => safeStorage.encryptString(t),
+          decrypt: (b) => safeStorage.decryptString(b),
+        }
+      : null;
+  } catch {
+    _codecCache = null;
+  }
+  return _codecCache;
+}
+
+const configStore = new ConfigStore(
+  path.join(app.getPath('userData'), 'bili-listen-config.json'),
+  undefined,
+  {
+    get encrypt() {
+      // 密钥未落盘时返回 null → sealCookieField 保持明文（等同旧版），
+      // 等 ensureCryptoKey() 检测到落盘后再补做密封，避免密文成孤儿。
+      if (!cryptoKeyReady) return null;
+      const c = safeStorageCodec();
+      return c && c.encrypt;
+    },
+    get decrypt() {
+      const c = safeStorageCodec();
+      return c && c.decrypt;
+    },
+  },
+);
 let config = configStore.get();
 
 function loadConfig() {
@@ -376,13 +459,16 @@ function registerIpc() {
       if (r.status === 'success') {
         saveConfig({ cookie: r.cookie, user: null });
         _wbiReset();
-        // 用拿到的 cookie 查一次用户信息
+        // 用拿到的 cookie 查一次用户信息。
+        // 安全：原始 cookie / access_token / refresh_token 只留在主进程，不下发渲染层。
         try {
           const status = await bili.checkLogin({ cookie: r.cookie });
           if (status.isLogin) saveConfig({ user: status });
-          return { ...r, user: status };
+          const { cookie: _omit, accessToken: _a, refreshToken: _t, ...safe } = r;
+          return { ...safe, user: status };
         } catch {
-          return r;
+          const { cookie: _omit, accessToken: _a, refreshToken: _t, ...safe } = r;
+          return safe;
         }
       }
       return r;
@@ -494,21 +580,55 @@ function registerIpc() {
   ipcMain.handle('api:history', wrap((p) => bili.getHistory({ ...p, cookie: config.cookie })));
 
   // 配置
-  ipcMain.handle('store:getAll', () => ({ ...config, dataDir: app.getPath('userData') }));
+  // 安全边界：渲染层永远拿不到 cookie 字段（含加密信封）。
+  // 登录态展示只需要 user（昵称/头像/等级，都是公开信息）。
+  ipcMain.handle('store:getAll', () => {
+    const { cookie: _omit, ...safe } = config;
+    return { ...safe, dataDir: app.getPath('userData'), cookieSealed: true };
+  });
+  // 渲染层的 setConfig 只允许写 UI / 播放偏好；cookie / user 只能由登录 IPC（主进程）写入，
+  // 防止被注入的脚本或失控的渲染代码覆写凭据。
+  const RENDER_WRITABLE_KEYS = [
+    'volume',
+    'rate',
+    'quality',
+    'playMode',
+    'sleepTimer',
+    'showLyric',
+    'autoNext',
+    'theme',
+    'minimizeToTray',
+    'windowBounds',
+    'lastRoute',
+    'session',
+  ];
   ipcMain.handle(
     'store:set',
     wrap(async (patch) => {
-      saveConfig(patch);
+      const safePatch = {};
+      if (patch && typeof patch === 'object') {
+        for (const k of RENDER_WRITABLE_KEYS) {
+          if (k in patch) safePatch[k] = patch[k];
+        }
+      }
+      saveConfig(safePatch);
       // 会话类改动（队列/断点）要求「关掉再开还在」，不等防抖
-      if (patch && (patch.session || patch.cookie || patch.user)) flushConfig();
-      return config;
+      if (safePatch.session) flushConfig();
+      const { cookie: _omit, ...safeReturn } = config;
+      return safeReturn;
     }),
   );
   // 窗口关闭前同步落盘：invoke 是异步的，beforeunload 里等不到回包
   ipcMain.on('store:setSync', (e, patch) => {
     try {
-      saveConfig(patch || {});
-      flushConfig();
+      const safePatch = {};
+      if (patch && typeof patch === 'object') {
+        for (const k of RENDER_WRITABLE_KEYS) {
+          if (k in patch) safePatch[k] = patch[k];
+        }
+      }
+      saveConfig(safePatch);
+      flushConfig(); // beforeunload 里等不到异步回包，无条件同步落盘
       e.returnValue = { ok: true };
     } catch (err) {
       e.returnValue = { ok: false, error: err.message };
@@ -598,6 +718,7 @@ if (!gotLock) {
 
   app.whenReady().then(() => {
     loadConfig();
+    ensureCryptoKey(); // 后台等 os_crypt 密钥落盘；就绪后补做明文 cookie 的密封迁移
     registerIpc();
     // 先把窗口画出来，再去起代理 / 托盘：代理 init 有磁盘和 socket 开销，
     // 放在 createWindow 之前会白等 100~300ms 才见窗口。

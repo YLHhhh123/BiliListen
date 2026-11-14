@@ -17,6 +17,7 @@
  */
 const fs = require('fs');
 const path = require('path');
+const { sealCookieField, unsealCookieField } = require('./sealed-cookie');
 
 const DEFAULTS = {
   // 播放器
@@ -42,11 +43,18 @@ const DEFAULTS = {
 };
 
 class ConfigStore {
-  constructor(file, defaults = DEFAULTS) {
+  /**
+   * @param {string} file  配置文件路径
+   * @param {object} [defaults]
+   * @param {{encrypt?:(t:string)=>Buffer|null, decrypt?:(b:Buffer)=>string}} [codec]
+   *   cookie 字段的加解密回调（safeStorage/DPAPI）。不传 = 明文行为（单测用）。
+   */
+  constructor(file, defaults = DEFAULTS, codec = null) {
     this.file = file;
     this.bakFile = file + '.bak';
     this.tmpFile = file + '.tmp';
     this.defaults = defaults;
+    this.codec = codec;
     this.data = { ...defaults };
     this.timer = null;
     this.dirty = false;
@@ -54,20 +62,35 @@ class ConfigStore {
 
   /** 读盘。主文件坏了回退 .bak，都坏了用默认值。 */
   load() {
-    const main = this._readJson(this.file);
+    const readOne = (file) => {
+      const obj = this._readJson(file);
+      return obj ? unsealCookieField(obj, this.codec && this.codec.decrypt) : null;
+    };
+    const main = readOne(this.file);
     if (main) {
       this.data = { ...this.defaults, ...main };
-      return this.data;
+    } else {
+      const bak = readOne(this.bakFile);
+      if (bak) {
+        console.warn('[config] 主配置损坏，已从 .bak 恢复');
+        this.data = { ...this.defaults, ...bak };
+      } else {
+        this.data = { ...this.defaults };
+        return this.data;
+      }
     }
-    const bak = this._readJson(this.bakFile);
-    if (bak) {
-      console.warn('[config] 主配置损坏，已从 .bak 恢复');
-      this.data = { ...this.defaults, ...bak };
+    // 解密失败时 unsealCookieField 会把原始信封挂在临时字段上：
+    // 摘出来单独保存，不进入内存配置（避免渲染层看到对象型 cookie），
+    // 但后续任何落盘都原样写回，绝不把磁盘上唯一一份密文覆盖成空串。
+    this._preserveEnvelope = this.data.__sealedCookieRaw || null;
+    delete this.data.__sealedCookieRaw;
+    // 安全迁移：仅在加密可用时把明文 cookie 改写成信封。
+    // 密钥未就绪时 codec.encrypt 为 null，保持明文（等同旧版），等就绪后由主进程补做。
+    if (typeof this.data.cookie === 'string' && this.data.cookie.trim() && this.codec && this.codec.encrypt) {
       this.dirty = true;
       this.flush();
-      return this.data;
+      console.log('[config] cookie 已从明文迁移为加密信封');
     }
-    this.data = { ...this.defaults };
     return this.data;
   }
 
@@ -121,7 +144,15 @@ class ConfigStore {
     if (!this.dirty) return false;
     try {
       fs.mkdirSync(path.dirname(this.file), { recursive: true });
-      const json = JSON.stringify(this.data, null, 2);
+      // cookie 字段加密成信封再落盘；其余配置保持明文（可手工备份/迁移）
+      let out = sealCookieField(this.data, this.codec && this.codec.encrypt);
+      // 上次解密失败 -> 原始信封原样写回，避免凭据被空串永久抹掉
+      if (this._preserveEnvelope && (!out.cookie || typeof out.cookie !== 'object')) {
+        out = { ...out, cookie: this._preserveEnvelope };
+      } else if (out.cookie && typeof out.cookie === 'object') {
+        this._preserveEnvelope = null; // 已成功重新密封，撤销保留
+      }
+      const json = JSON.stringify(out, null, 2);
       fs.writeFileSync(this.tmpFile, json, 'utf8');
       if (fs.existsSync(this.file)) {
         try {

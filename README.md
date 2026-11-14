@@ -62,11 +62,11 @@ npm start          # 或双击 start.bat
 cd app
 node scripts\build.js
 # 产物：
-#   dist\BiliListen-Setup-1.1.0.exe     安装包（65.6 MB）
+#   dist\BiliListen-Setup-1.1.1.exe     安装包（66 MB，已自签名）
 #   dist\BiliListen-win32-x64\          免安装目录版（整个文件夹拷走也能跑）
 ```
 
-双击 `BiliListen-Setup-1.1.0.exe`，跟市面上的桌面软件一样：
+双击 `BiliListen-Setup-1.1.1.exe`，跟市面上的桌面软件一样：
 
 1. 选安装位置（默认 `%LOCALAPPDATA%\Programs\BiliListen`，**当前用户安装，不要管理员权限**，不弹 UAC）
 2. 装完自动在**桌面**和**开始菜单**创建 `BiliListen` 快捷方式，并直接启动
@@ -91,7 +91,8 @@ node scripts\build.js            # 检测到 certs\codesign.pfx 就自动签名
 
 | 存了什么 | 位置 |
 |---|---|
-| 登录态（SESSDATA）、音量、倍速、音质、播放模式、主题、窗口大小、上次停留页面 | `%APPDATA%\BiliListen\bili-listen-config.json` |
+| 登录态（SESSDATA，**加密信封**）、音量、倍速、音质、播放模式、主题、窗口大小、上次停留页面 | `%APPDATA%\BiliListen\bili-listen-config.json` |
+| 加解密用的系统密钥 | 同目录 `Local State` 的 `os_crypt.encrypted_key`（Windows 账户绑定） |
 | **播放队列 + 当前曲目 + 听到第几秒** | 同上，`session` 字段 |
 | 本地播放记录、搜索历史 | 同目录下的 Chromium `Local Storage` |
 | 登录窗口的 Cookie 分区 | 同目录下的 `Network\Cookies` |
@@ -102,6 +103,36 @@ node scripts\build.js            # 检测到 certs\codesign.pfx 就自动签名
 
 从旧版本（`%APPDATA%\bili-listen-desktop`）升级的，首次启动会自动迁移配置、登录态和播放记录，不用重新登录。
 
+## 账号安全
+
+v1.1.1 针对「自动登录会不会被盗号」做了加固，三层边界如下。
+
+**1. 磁盘上不再是明文 Cookie**
+
+`bili-listen-config.json` 里的 `cookie` 字段存的是加密信封：
+
+```json
+"cookie": { "__sealed": 1, "data": "<base64>" }
+```
+
+主进程用 Electron `safeStorage` 加密（Windows 底层是 Chromium `os_crypt`：AES 主密钥经 DPAPI 加密后存进 `Local State`，**绑定当前系统账户**）。把配置文件拷到别的机器、或换一个 Windows 用户登录，都解不出 `SESSDATA`。其余字段（主题、队列、音量）仍是明文 JSON，方便手工备份。
+
+首次升级时旧版明文 cookie 会自动改写成信封。有个实现细节：密钥文件由 Chromium 延迟落盘（约 10 秒），全新环境启动后若立刻被强杀，密钥还没写入磁盘 —— 此时**保持明文兜底（等同旧版行为），绝不用一把没落盘的密钥去加密**，等密钥就绪后主进程自动补做密封。这样不会出现「密文成孤儿、重启后掉登录」。
+
+**2. 渲染层拿不到 Cookie**
+
+界面代码通过 `getAllConfig` 只能拿到 `user`（昵称/头像/等级等公开信息），`cookie` 字段被剔除；`setConfig` 也被白名单限制，注入的脚本或失控的前端代码无法读取、覆写登录态。Cookie 只由主进程在请求 `api.bilibili.com` / `passport.bilibili.com` 时附加；本地图片代理只带 Referer/UA，不带任何凭据。
+
+**3. 退出登录要吊销服务端会话**
+
+点「退出登录」只会清除本机配置，**不会让 B 站服务端的那个会话失效**。如果怀疑账号在别处被使用，请到 B 站网页端：
+
+> 设置 → 安全中心 → 账号安全 → **登录设备管理 / 下线所有设备**，并修改密码。
+
+这一步才是真正吊销凭据的地方，本地清理替代不了。重装/卸载不会删除 `%APPDATA%\BiliListen`，所以拷贝过该目录的人理论上能复用登录态 —— 也因此第 1 层的系统账户绑定很重要。
+
+**外发边界**：全项目没有遥测、没有第三方统计，网络请求只指向 B 站自家域名（`api.bilibili.com`、`passport.bilibili.com`、`*.hdslb.com` CDN）。可用 `verify-sealed-storage.js` / `verify-sealed-e2e.js` 复核加密与渲染层隔离。
+
 ## 自动化验收
 
 ```powershell
@@ -111,6 +142,8 @@ node scripts\verify-settings.js    # 设置与倍速
 node scripts\verify-persistence.js # 关掉再开 18 项
 node scripts\verify-login.js       # 登录 8 项
 node scripts\verify-cookie-import.js
+node scripts\verify-sealed-storage.js  # 加密信封与 ConfigStore 单测 15 项
+node scripts\verify-sealed-e2e.js      # 真机 DPAPI：迁移/补做密封/强杀重启 12 项
 ```
 
 用 CDP 连进渲染进程，10 项全过（实测 10/10）：
@@ -138,6 +171,8 @@ PASS 10. 队列抽屉打开
 | `node scripts\verify-login.js` | 扫码二维码生成 / 轮询 / 浏览器登录 IPC / Cookie 校验 / 三 Tab 弹层 | **8/8** |
 | `node scripts\verify-cookie-import.js` | 粘贴 Cookie 的解析（裸值/整行/脏输入/头注入）+ 落盘补全 + 假凭据必须被拒 | **15/15**（设 `BILI_TEST_COOKIE` 时 16/16） |
 | `node scripts\verify-features.js` | **v1.1.0 新功能专项**：倍速下拉 6 档 / 定时关闭双开关（播完当前 + N 分钟可同时启用）/ 侧边栏自动目录（热门/榜单/收藏一键灌队列）/ 卡片菜单「以此生成播放目录」 | **10/10** |
+| `node scripts\verify-sealed-storage.js` | **v1.1.1 安全专项**：信封纯函数 / 坏密文兜底 / 加密器抛错明文兜底 / 旧版明文迁移 / `.bak` 回滚 / 解密失败不丢其余配置 | **15/15** |
+| `node scripts\verify-sealed-e2e.js` | **v1.1.1 真机 DPAPI**：旧版明文自动迁移、密钥延迟落盘后自动补做密封、`getAllConfig` 不下发 cookie、渲染层注入被剥离、**强杀重启后登录态恢复** | **12/12** |
 
 > **测试全程静音 + 不弹窗**：`verify.js` 启动参数带 `--mute-audio --hidden`，主进程 `isHidden` 分支不调用 `win.show()`，任务栏都看不到窗口。
 >
